@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://bo6mqwwcwbmjs"]
+
+[ext_resource type="Script" uid="uid://cq6wa0ec0ywm4" path="res://bb_main.gd" id="1_4u6ek"]
+
+[node name="block_brawl" type="Node3D" unique_id=1621225659]
+script = ExtResource("1_4u6ek")
