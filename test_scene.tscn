@@ -1,0 +1,29 @@
+[gd_scene format=3 uid="uid://dl1fipi3dqalu"]
+
+[ext_resource type="Script" path="res://grid.gd" id="1_ia1lp"]
+[ext_resource type="Script" path="res://player.gd" id="2_sasra"]
+[ext_resource type="Script" path="res://cannon_blast.gd" id="3_sasra"]
+
+[sub_resource type="CircleShape2D" id="CircleShape2D_coq8p"]
+radius = 24.0
+
+[node name="test_scene" type="Node2D" unique_id=2010312880]
+
+[node name="Background" type="ColorRect" parent="." unique_id=1116253964]
+offset_right = 1152.0
+offset_bottom = 648.0
+mouse_filter = 2
+color = Color(0.07, 0.07, 0.1, 1)
+
+[node name="Grid" type="Node2D" parent="." unique_id=1062039186]
+script = ExtResource("1_ia1lp")
+
+[node name="Player" type="CharacterBody2D" parent="." unique_id=453813610]
+position = Vector2(576, 324)
+script = ExtResource("2_sasra")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="Player" unique_id=1900607691]
+shape = SubResource("CircleShape2D_coq8p")
+
+[node name="CannonBlast" type="Node2D" parent="." unique_id=558899848]
+script = ExtResource("3_sasra")

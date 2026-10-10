@@ -1,7 +1,7 @@
 extends Node3D
 ## Block Brawl port (from html/block-brawl-quality.html): local 1v1 block
 ## fighter. Menu -> select (color/hat/visor) -> countdown -> fight -> KO
-## slow-mo -> winner screen. P1: WASD + J/K/Space. P2: arrows + ,/./Shift.
+## slow-mo -> winner screen. P1: WASD + J/K/L/O/P/Space. P2: arrows + ,/./Numpad1-5/Shift.
 
 const FighterScript = preload("res://bb_fighter.gd")
 const ArenaScript = preload("res://bb_arena.gd")
@@ -24,11 +24,14 @@ var show_fps := true
 var fighters: Array = []
 var vfx = null
 var audio = null
+var arena = null
 var cam: Camera3D
 var sun: DirectionalLight3D
 var cp := Vector3(24, 24, 24)
 var look := Vector3.ZERO
 var orbit := 0.0
+var zD := 27.0
+var av := Vector3.ZERO
 var cdT := 0.0
 var lastN := 0
 var koT := 0.0
@@ -44,6 +47,10 @@ var d0: Label
 var d1: Label
 var b0fill: ColorRect
 var b1fill: ColorRect
+var cd_l: Array = []
+var cd_r: Array = []
+const CD_COLS := [Color(1.0, 0.85, 0.2), Color(1.0, 0.5, 0.15), Color(0.75, 0.4, 1.0)]
+const CD_ORDER := ["S1", "S2", "S3"]
 var cd: Label
 var fps: Label
 var screens := {}
@@ -69,13 +76,13 @@ func _col(i: int) -> Color:
 
 func _ready() -> void:
 	_build_env()
-	var arena = ArenaScript.new()
+	arena = ArenaScript.new()
 	add_child(arena)
-	arena.build()
 	vfx = VfxScript.new()
 	add_child(vfx)
 	audio = AudioScript.new()
 	add_child(audio)
+	arena.build(vfx)
 	_make_fighters()
 	_build_ui()
 	apply_quality()
@@ -88,29 +95,29 @@ func _build_env() -> void:
 	env.background_mode = Environment.BG_SKY
 	var sky := Sky.new()
 	var psm := ProceduralSkyMaterial.new()
-	psm.sky_top_color = Color(0.37, 0.69, 0.95)
-	psm.sky_horizon_color = Color(0.81, 0.93, 1.0)
-	psm.ground_bottom_color = Color(0.35, 0.54, 0.27)
-	psm.ground_horizon_color = Color(0.92, 0.97, 1.0)
+	psm.sky_top_color = Color(0.95, 0.75, 0.58)
+	psm.sky_horizon_color = Color(1.0, 0.91, 0.82)
+	psm.ground_bottom_color = Color(0.29, 0.45, 0.22)
+	psm.ground_horizon_color = Color(0.85, 0.76, 0.66)
 	sky.sky_material = psm
 	env.sky = sky
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.set("tone_mapper", 3) # ACES
 	env.set("fog_enabled", true)
-	env.set("fog_light_color", Color(0.81, 0.93, 1.0))
+	env.set("fog_light_color", Color(0.95, 0.86, 0.75))
 	env.set("fog_depth_begin", 50.0)
 	env.set("fog_depth_end", 100.0)
 	we.environment = env
 	add_child(we)
 	sun = DirectionalLight3D.new()
 	sun.light_color = Color(1.0, 0.94, 0.82)
-	sun.light_energy = 1.7
+	sun.light_energy = 1.35
 	sun.shadow_enabled = true
 	sun.rotation = Vector3(-0.9, 0.6, 0)
 	add_child(sun)
 	var rim := DirectionalLight3D.new()
 	rim.light_color = Color(0.62, 0.82, 1.0)
-	rim.light_energy = 0.55
+	rim.light_energy = 0.45
 	rim.shadow_enabled = false
 	rim.rotation = Vector3(-0.4, -2.4, 0)
 	add_child(rim)
@@ -132,9 +139,11 @@ func _make_fighters() -> void:
 	fighters[0].foe = fighters[1]
 	fighters[1].foe = fighters[0]
 	fighters[0].keys = {"up": [KEY_W], "down": [KEY_S], "left": [KEY_A], "right": [KEY_D],
-		"L": [KEY_J], "H": [KEY_K], "D": [KEY_SPACE]}
+		"L": [KEY_J], "H": [KEY_K], "D": [KEY_SPACE],
+		"S1": [KEY_L], "S2": [KEY_O], "S3": [KEY_P]}
 	fighters[1].keys = {"up": [KEY_UP], "down": [KEY_DOWN], "left": [KEY_LEFT], "right": [KEY_RIGHT],
-		"L": [KEY_KP_1, KEY_COMMA], "H": [KEY_KP_2, KEY_PERIOD], "D": [KEY_SHIFT, KEY_SLASH]}
+		"L": [KEY_KP_1, KEY_COMMA], "H": [KEY_KP_2, KEY_PERIOD], "D": [KEY_SHIFT, KEY_SLASH],
+		"S1": [KEY_KP_3], "S2": [KEY_KP_4], "S3": [KEY_KP_5]}
 	_pv()
 
 
@@ -152,8 +161,8 @@ func _setup_fighters() -> void:
 
 func start_match() -> void:
 	_setup_fighters()
-	fighters[0].reset_match(Vector3(-2.5, 0, 2.5), atan2(5.0, -5.0))
-	fighters[1].reset_match(Vector3(2.5, 0, -2.5), atan2(-5.0, 5.0))
+	fighters[0].reset_match(Vector3(-2.0, 0, 2.0), atan2(4.0, -4.0))
+	fighters[1].reset_match(Vector3(2.0, 0, -2.0), atan2(-4.0, 4.0))
 	vfx.clear_all()
 	ts = 1.0
 	hs = 0.0
@@ -166,6 +175,12 @@ func start_match() -> void:
 	b0fill.color = _col(int(cfg[0]["c"]))
 	b1fill.color = _col(int(cfg[1]["c"]))
 	show_screen(null)
+
+
+func damage_props(pos: Vector3, radius: float, dmg: float) -> int:
+	if arena == null:
+		return 0
+	return arena.damage_props(pos, radius, dmg)
 
 
 func ko(f) -> void:
@@ -280,6 +295,12 @@ func _process(dt: float) -> void:
 		b1fill.anchor_left = 1.0 - clampf(float(b.hp) / 100.0, 0.0, 1.0)
 		d0.text = str(int(ceil(float(a.hp))))
 		d1.text = str(int(ceil(float(b.hp))))
+		for j in 3:
+			var n: String = CD_ORDER[j]
+			var fl: float = 1.0 - clampf(float(a.cd[n]) / float(a.cd_max[n]), 0.0, 1.0)
+			(cd_l[j] as ColorRect).anchor_right = fl
+			var fr: float = 1.0 - clampf(float(b.cd[n]) / float(b.cd_max[n]), 0.0, 1.0)
+			(cd_r[j] as ColorRect).anchor_left = 1.0 - fr
 	if show_fps:
 		fight_t += dt
 		if fight_t >= 0.5:
@@ -290,21 +311,26 @@ func _process(dt: float) -> void:
 func _cam_upd(dt: float) -> void:
 	var in_fight := state == "play" or state == "count" or state == "ko" or state == "pause" or state == "over"
 	var tg := Vector3(0, 0.5, 0)
-	var D := 34.0
+	var D := 30.0
 	var dir := Vector3.ZERO
 	if in_fight and fighters.size() == 2:
 		var p0: Vector3 = fighters[0].position
 		var p1: Vector3 = fighters[1].position
+		var v0: Vector3 = fighters[0].v
+		var v1: Vector3 = fighters[1].v
 		var sep := Vector2(p0.x - p1.x, p0.z - p1.z).length()
-		tg = Vector3((p0.x + p1.x) * 0.3, 0.5, (p0.z + p1.z) * 0.3)
+		av = av.lerp((v0 + v1) * 0.5, 1.0 - exp(-3.0 * dt))
+		tg = Vector3((p0.x + p1.x) * 0.5, 0.5, (p0.z + p1.z) * 0.5) + av * 0.35
 		var vp := get_viewport().get_visible_rect().size
-		D = minf(36.0, 25.0 + sep * 0.8) * maxf(1.0, 1.3 / maxf(vp.x / maxf(vp.y, 1.0), 0.1))
+		D = minf(30.0, 20.0 + sep * 0.9) * maxf(1.0, 1.3 / maxf(vp.x / maxf(vp.y, 1.0), 0.1))
 		dir = Vector3(1, 0.95, 1).normalized()
 	else:
 		orbit += dt * 0.12
-		D = 27.0 if state == "select" else 34.0
+		av = av.lerp(Vector3.ZERO, 1.0 - exp(-3.0 * dt))
+		D = 24.0 if state == "select" else 30.0
 		dir = Vector3(cos(orbit + 0.8), 0.9, sin(orbit + 0.8)).normalized()
-	var goal := tg + dir * D
+	zD = lerpf(zD, D, 1.0 - exp(-3.0 * dt))
+	var goal := tg + dir * zD
 	cp = cp.lerp(goal, 1.0 - exp(-4.0 * dt))
 	look = look.lerp(tg, 1.0 - exp(-5.0 * dt))
 	cam.position = cp
@@ -394,6 +420,8 @@ func _build_ui() -> void:
 	d1 = _hud_num(Vector2(-398, 40), HORIZONTAL_ALIGNMENT_RIGHT, true)
 	_bar(false)
 	_bar(true)
+	_cd_pips(false)
+	_cd_pips(true)
 	cd = Label.new()
 	cd.set_anchors_preset(Control.PRESET_FULL_RECT)
 	cd.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -439,7 +467,7 @@ func _build_ui() -> void:
 	_btn(row2, "Start match", "start", true)
 	_btn(row2, "Back", "menu")
 	var hint := Label.new()
-	hint.text = "P1: WASD move, J light, K heavy, Space dash. P2: arrows move, , / . attacks, Shift or / dash. Esc pauses."
+	hint.text = "P1: WASD move, J light, K heavy, L dash-atk, O uppercut, P spin, Space dash. P2: arrows, ,/. attacks, Numpad3/4/5 specials, Shift or / dash. Esc pauses. Cooldowns: yellow=L, orange=O, purple=P."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(560, 0)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -530,6 +558,29 @@ func _bar(right: bool) -> void:
 		b1fill = fill
 	else:
 		b0fill = fill
+
+
+func _cd_pips(right: bool) -> void:
+	for j in 3:
+		var bg := ColorRect.new()
+		bg.color = Color(0, 0, 0, 0.45)
+		bg.custom_minimum_size = Vector2(120, 10)
+		if right:
+			bg.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+			bg.position = Vector2(-398 + j * 128, 100)
+		else:
+			bg.position = Vector2(18 + j * 128, 100)
+		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		hud.add_child(bg)
+		var fill := ColorRect.new()
+		fill.color = CD_COLS[j]
+		fill.set_anchors_preset(Control.PRESET_FULL_RECT)
+		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		bg.add_child(fill)
+		if right:
+			cd_r.append(fill)
+		else:
+			cd_l.append(fill)
 
 
 func _slider(grid: GridContainer, text: String, val: int) -> HSlider:

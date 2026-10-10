@@ -4,14 +4,27 @@ extends Node3D
 ## procedural animation, HTML attack table (light/heavy).
 
 const ATK_L := {"w": 0.1, "a": 0.08, "r": 0.18, "dmg": 6.0, "kb": 4.5,
-	"range": 1.7, "arc": 0.45, "lunge": 3.0, "sh": 0.08, "hs": 0.04, "vy": 0.0}
+	"range": 2.0, "arc": 0.32, "lunge": 3.0, "sh": 0.08, "hs": 0.04, "vy": 0.0,
+	"kind": "punch", "big": false, "radial": false}
 const ATK_H := {"w": 0.38, "a": 0.1, "r": 0.42, "dmg": 15.0, "kb": 10.0,
-	"range": 2.2, "arc": 0.2, "lunge": 5.5, "sh": 0.3, "hs": 0.09, "vy": 5.0}
+	"range": 2.6, "arc": 0.12, "lunge": 5.5, "sh": 0.3, "hs": 0.09, "vy": 5.0,
+	"kind": "punch", "big": true, "radial": false}
+const ATK_S1 := {"w": 0.22, "a": 0.3, "r": 0.3, "dmg": 10.0, "kb": 7.0,
+	"range": 2.4, "arc": 0.3, "lunge": 0.0, "sh": 0.2, "hs": 0.06, "vy": 0.0,
+	"kind": "dash", "big": false, "radial": false, "cd": 4.0}
+const ATK_S2 := {"w": 0.3, "a": 0.15, "r": 0.45, "dmg": 12.0, "kb": 6.0,
+	"range": 2.2, "arc": 0.4, "lunge": 2.0, "sh": 0.25, "hs": 0.08, "vy": 9.0,
+	"kind": "upper", "big": true, "radial": false, "cd": 6.0}
+const ATK_S3 := {"w": 0.3, "a": 0.35, "r": 0.35, "dmg": 9.0, "kb": 8.0,
+	"range": 2.6, "arc": 0.0, "lunge": 1.0, "sh": 0.2, "hs": 0.06, "vy": 2.0,
+	"kind": "spin", "big": true, "radial": true, "cd": 8.0}
+const CD_ORDER := ["S1", "S2", "S3"]
 
 var idx := 0
 var game = null
 var foe = null
-var keys := {"up": [], "down": [], "left": [], "right": [], "L": [], "H": [], "D": []}
+var keys := {"up": [], "down": [], "left": [], "right": [], "L": [], "H": [], "D": [],
+	"S1": [], "S2": [], "S3": []}
 
 var body_col := Color.BLUE
 var hat_kind := 1
@@ -34,7 +47,10 @@ var rec := 0.0
 var stun := 0.0
 var ph := 0.0
 var mass := 1.0
-var buf := {"L": -9.0, "H": -9.0, "D": -9.0}
+var buf := {"L": -9.0, "H": -9.0, "D": -9.0, "S1": -9.0, "S2": -9.0, "S3": -9.0}
+var cd := {"S1": 0.0, "S2": 0.0, "S3": 0.0}
+var cd_max := {"S1": 4.0, "S2": 6.0, "S3": 8.0}
+var spin_a := 0.0
 var _dd := Vector3.ZERO
 var _tr := 0.0
 
@@ -83,6 +99,9 @@ func reset_match(pos: Vector3, p_ang: float) -> void:
 	inv = 0.0
 	flash = 0.0
 	rec = 0.0
+	spin_a = 0.0
+	for key in cd:
+		cd[key] = 0.0
 	visible = true
 	rotation.y = ang
 
@@ -122,14 +141,19 @@ func rebuild() -> void:
 			c.queue_free()
 	mats.clear()
 	var body := _mat(body_col)
-	var dk := _mat(body_col * 0.6)
-	var sk := _mat(Color(1.0, 0.85, 0.69), 0.7)
+	var dk := _mat(Color(body_col.r * 0.6, body_col.g * 0.6, body_col.b * 0.6))
 	var blk := _mat(Color(0.08, 0.08, 0.08), 0.4)
-	arm_l.position = Vector3(-0.85, 0.75, 0)
-	arm_r.position = Vector3(0.85, 0.75, 0)
-	_bx(0.36, 0.36, 0.36, sk, Vector3.ZERO, arm_l)
-	_bx(0.36, 0.36, 0.36, sk, Vector3.ZERO, arm_r)
+	var shirt := _mat(Color(0.93, 0.93, 0.93), 0.8)
+	# arms attached at head sides (fists overlap head edge)
+	arm_l.position = Vector3(-0.62, 0.55, 0)
+	arm_r.position = Vector3(0.62, 0.55, 0)
+	_bx(0.36, 0.36, 0.36, body, Vector3.ZERO, arm_l)
+	_bx(0.36, 0.36, 0.36, body, Vector3.ZERO, arm_r)
+	# simple floating block
 	head_mi = _bx(1.0, 1.0, 1.0, body, Vector3(0, 0.55, 0), model)
+	# block attire: white shirt band + dark tie
+	_bx(1.08, 0.32, 1.08, shirt, Vector3(0, 0.22, 0), model)
+	_bx(0.18, 0.34, 0.05, dk, Vector3(0, 0.24, 0.55), model)
 	if visor:
 		_bx(0.6, 0.16, 0.06, _mat(Color(0.1, 0.16, 0.33), 0.2, 0.5), Vector3(0, 0.6, 0.51), model)
 	else:
@@ -177,6 +201,12 @@ func _input(event: InputEvent) -> void:
 		buf["H"] = game.now
 	elif k in (keys["D"] as Array) or kc in (keys["D"] as Array):
 		buf["D"] = game.now
+	elif k in (keys["S1"] as Array) or kc in (keys["S1"] as Array):
+		buf["S1"] = game.now
+	elif k in (keys["S2"] as Array) or kc in (keys["S2"] as Array):
+		buf["S2"] = game.now
+	elif k in (keys["S3"] as Array) or kc in (keys["S3"] as Array):
+		buf["S3"] = game.now
 
 
 func _has(n: String) -> bool:
@@ -200,10 +230,12 @@ func upd(dt: float, play: bool) -> void:
 	inv = maxf(0.0, inv - dt)
 	flash = maxf(0.0, flash - dt)
 	rec = maxf(0.0, rec - dt)
+	for key in cd:
+		cd[key] = maxf(0.0, float(cd[key]) - dt)
 	if st == "ko":
 		return
-	position.x = clampf(position.x, -6.6, 6.6)
-	position.z = clampf(position.z, -6.6, 6.6)
+	position.x = clampf(position.x, -4.7, 4.7)
+	position.z = clampf(position.z, -4.7, 4.7)
 	var ix := 0.0
 	var iy := 0.0
 	if play:
@@ -226,10 +258,19 @@ func upd(dt: float, play: bool) -> void:
 				start_dash(Vector3(wx, 0, wz) if wl > 0.01 else face)
 			elif _has("H"):
 				_eat("H")
-				start_atk(false)
+				start_atk("H")
 			elif _has("L"):
 				_eat("L")
-				start_atk(true)
+				start_atk("L")
+			elif _has("S1") and float(cd["S1"]) <= 0.0:
+				_eat("S1")
+				start_atk("S1")
+			elif _has("S2") and float(cd["S2"]) <= 0.0:
+				_eat("S2")
+				start_atk("S2")
+			elif _has("S3") and float(cd["S3"]) <= 0.0:
+				_eat("S3")
+				start_atk("S3")
 		if st == "free":
 			var e := 1.0 - exp(-(16.0 if wl > 0.01 else 11.0) * dt)
 			v.x += (wx * 6.4 - v.x) * e
@@ -242,6 +283,19 @@ func upd(dt: float, play: bool) -> void:
 		var e2 := exp(-7.0 * dt)
 		v.x *= e2
 		v.z *= e2
+		if atk != null and String(atk["kind"]) == "dash" and foe != null and String(foe.st) != "ko":
+			var ddx: float = foe.position.x - position.x
+			var ddz: float = foe.position.z - position.z
+			var dl := Vector2(ddx, ddz).length()
+			if dl > 0.05:
+				v.x = ddx / dl * 14.0
+				v.z = ddz / dl * 14.0
+				ang = atan2(ddx, ddz)
+				face = Vector3(sin(ang), 0, cos(ang))
+		if atk != null and String(atk["kind"]) == "spin":
+			spin_a += dt * 18.0
+		else:
+			spin_a = 0.0
 		if not hit_done and t >= float(atk["w"]):
 			hit_done = true
 			strike()
@@ -287,11 +341,20 @@ func upd(dt: float, play: bool) -> void:
 		game.ko(self)
 
 
-func start_atk(light: bool) -> void:
-	if light:
+func start_atk(kind: String) -> void:
+	if kind == "L":
 		atk = ATK_L.duplicate()
-	else:
+	elif kind == "H":
 		atk = ATK_H.duplicate()
+	elif kind == "S1":
+		atk = ATK_S1.duplicate()
+	elif kind == "S2":
+		atk = ATK_S2.duplicate()
+	else:
+		atk = ATK_S3.duplicate()
+		kind = "S3"
+	if atk.has("cd"):
+		cd[kind] = float(atk["cd"])
 	st = "atk"
 	t = 0.0
 	hit_done = false
@@ -301,7 +364,9 @@ func start_atk(light: bool) -> void:
 		if Vector2(dx, dz).length() < 5.0:
 			ang = atan2(dx, dz)
 	face = Vector3(sin(ang), 0, cos(ang))
-	if light:
+	if kind == "S1":
+		game.audio.play("dash")
+	elif kind == "L":
 		game.audio.play("light")
 	else:
 		game.audio.play("heavy")
@@ -322,9 +387,10 @@ func start_dash(d: Vector3) -> void:
 
 
 func strike() -> void:
-	var heavy := float(atk["dmg"]) > 10.0
+	var heavy := bool(atk["big"])
 	game.vfx.slash(position, ang, heavy, body_col)
 	v += face * float(atk["lunge"])
+	game.damage_props(position, float(atk["range"]) + 0.6, float(atk["dmg"]))
 	if foe == null:
 		return
 	var dx: float = foe.position.x - position.x
@@ -332,7 +398,7 @@ func strike() -> void:
 	var d: float = Vector2(dx, dz).length()
 	if String(foe.st) == "ko" or d > float(atk["range"]) + 0.45:
 		return
-	if d > 0.01 and (dx * face.x + dz * face.z) / d < float(atk["arc"]):
+	if not bool(atk["radial"]) and d > 0.01 and (dx * face.x + dz * face.z) / d < float(atk["arc"]):
 		return
 	if float(foe.inv) > 0.0:
 		game.vfx.burst(foe.position + Vector3(0, 0.8, 0), Color.WHITE, 4, 3.0, 0.07, 0.3)
@@ -375,37 +441,75 @@ func anim(dt: float, tnow: float) -> void:
 	var E := [0.0, 0.0]
 	var U := [0.0, 0.0]
 	if st == "atk" and atk != null:
-		var hv: bool = float(atk["dmg"]) > 10.0
-		var rc := 1.7 if hv else 1.4
-		var hu := 0.9 if hv else 0.25
-		var u := t
+		var kind := String(atk["kind"])
 		var W: float = float(atk["w"])
 		var A: float = float(atk["a"])
 		var R: float = float(atk["r"])
-		var ex := 0.0
-		var uy := 0.0
-		if u < W:
-			var e := u / W
-			ex = -0.5 * e
-			uy = hu * e
-			lean = -0.25 * e
-		elif u < W + A:
-			var e2 := (u - W) / A
-			ex = -0.5 + (rc + 0.5) * e2
-			uy = hu * (1.0 - e2)
-			lean = 0.45
+		var u := t
+		if kind == "dash":
+			lean = 0.8
+			sq = 1.08
+			E[0] = 1.2
+			E[1] = 1.2
+			U[0] = 0.0
+			U[1] = 0.0
+		elif kind == "upper":
+			if u < W:
+				var e := u / maxf(W, 0.001)
+				lean = -0.35 * e
+				sq = 1.0 - 0.18 * e
+				E[0] = -0.4 * e
+				E[1] = -0.4 * e
+			elif u < W + A:
+				lean = -0.55
+				sq = 1.12
+				E[0] = 0.5
+				E[1] = 0.5
+				U[0] = 1.2
+				U[1] = 1.2
+			else:
+				var e4u := (u - W - A) / maxf(R, 0.001)
+				lean = 0.2 * (1.0 - e4u)
+				sq = 1.0
+				E[0] = 0.6 * (1.0 - e4u)
+				E[1] = 0.6 * (1.0 - e4u)
+				U[0] = 0.4 * (1.0 - e4u)
+				U[1] = 0.4 * (1.0 - e4u)
+		elif kind == "spin":
+			lean = 0.15
+			sq = 1.0
+			E[0] = 1.0
+			E[1] = 1.0
+			U[0] = 0.1
+			U[1] = 0.1
 		else:
-			var e3 := (u - W - A) / maxf(R, 0.001)
-			ex = rc * (1.0 - e3 * 0.9)
-			uy = 0.0
-			lean = 0.3
-		E[1] = ex
-		U[1] = uy
-		if hv:
-			E[0] = ex
-			U[0] = uy
-		else:
-			E[0] = -0.25
+			var hv: bool = bool(atk["big"])
+			var rc := 1.7 if hv else 1.4
+			var hu := 0.9 if hv else 0.25
+			var ex := 0.0
+			var uy := 0.0
+			if u < W:
+				var e := u / W
+				ex = -0.5 * e
+				uy = hu * e
+				lean = -0.25 * e
+			elif u < W + A:
+				var e2 := (u - W) / A
+				ex = -0.5 + (rc + 0.5) * e2
+				uy = hu * (1.0 - e2)
+				lean = 0.45
+			else:
+				var e3 := (u - W - A) / maxf(R, 0.001)
+				ex = rc * (1.0 - e3 * 0.9)
+				uy = 0.0
+				lean = 0.3
+			E[1] = ex
+			U[1] = uy
+			if hv:
+				E[0] = ex
+				U[0] = uy
+			else:
+				E[0] = -0.25
 	elif st == "stun":
 		lean = -0.5
 		tw = sin(tnow * 40.0) * 0.06
@@ -424,13 +528,17 @@ func anim(dt: float, tnow: float) -> void:
 		var arm: Node3D = arm_r if k == 1 else arm_l
 		var x := clampf(float(E[k]), 0.0, 1.0)
 		var sw := (la if k == 1 else -la) * 0.35
-		var hv2 := atk != null and float(atk["dmg"]) > 10.0
-		arm.position = Vector3(s * (0.85 - 0.3 * x),
-			0.75 + float(U[k]) + (0.2 * x if st == "atk" else 0.0),
+		var hv2 := atk != null and bool(atk["big"])
+		arm.position = Vector3(s * (0.62 - 0.3 * x),
+			0.55 + float(U[k]) + (0.2 * x if st == "atk" else 0.0),
 			float(E[k]) + sw)
 		arm.scale = Vector3.ONE * (1.0 + 0.45 * x * (1.0 if hv2 else 0.4))
 	model.rotation.x = lean
 	model.rotation.z = tw
+	if st == "atk" and atk != null and String(atk["kind"]) == "spin":
+		model.rotation.y = spin_a
+	else:
+		model.rotation.y = 0.0
 	model.scale = Vector3(1.0 / sqrt(sq), sq, 1.0 / sqrt(sq))
 	model.position.y = absf(sin(ph)) * 0.06 * w
 	rotation.y = ang
