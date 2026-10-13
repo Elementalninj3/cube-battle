@@ -1,0 +1,21 @@
+[gd_scene format=3 uid="uid://dqx2lee1hb8he"]
+
+[ext_resource type="PackedScene" uid="uid://dvjk3wxxrssgk" path="res://props/sword.glb" id="1"]
+[ext_resource type="PackedScene" uid="uid://bngbay5r3eott" path="res://props/shield.glb" id="2"]
+[ext_resource type="PackedScene" uid="uid://beffn0n7d5j7l" path="res://skins/cubeknight.glb" id="3"]
+
+[node name="TmpSwordView" type="Node3D" unique_id=1065245181]
+
+[node name="Sword" parent="." unique_id=394596714 instance=ExtResource("1")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2, 1, 0)
+
+[node name="Shield" parent="." unique_id=854389400 instance=ExtResource("2")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0)
+
+[node name="Knight" parent="." unique_id=1037030465 instance=ExtResource("3")]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 2, 0, 0)
+
+[node name="Sun" type="DirectionalLight3D" parent="." unique_id=2088128576]
+transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 5, 0)
+light_energy = 1.2
+shadow_enabled = true

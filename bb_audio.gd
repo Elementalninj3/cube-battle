@@ -21,6 +21,10 @@ func _ready() -> void:
 	streams["hitL"] = _mix(_tone(220.0, 90.0, 0.1, 1, 0.2), _noise(0.06, 0.2, 2500.0, 800.0))
 	streams["hitH"] = _mix(_tone(140.0, 40.0, 0.25, 2, 0.3), _noise(0.18, 0.4, 900.0, 150.0))
 	streams["dash"] = _noise(0.15, 0.2, 4000.0, 1200.0)
+	streams["shot"] = _noise(0.09, 0.5, 3500.0, 500.0)
+	streams["boom"] = _mix(_tone(90.0, 30.0, 0.4, 2, 0.5), _noise(0.35, 0.5, 700.0, 100.0))
+	streams["parry"] = _mix(_tone(1200.0, 800.0, 0.2, 1, 0.4), _noise(0.12, 0.35, 5000.0, 2000.0))
+	streams["bash"] = _mix(_tone(120.0, 50.0, 0.25, 2, 0.5), _noise(0.15, 0.4, 900.0, 150.0))
 	streams["beep_lo"] = _tone(560.0, 560.0, 0.15, 1, 0.15)
 	streams["beep_hi"] = _tone(900.0, 900.0, 0.15, 1, 0.15)
 	streams["ko"] = _mix(_tone(300.0, 50.0, 0.5, 2, 0.3), _noise(0.4, 0.4, 1200.0, 200.0))
@@ -77,6 +81,7 @@ func _noise(dur: float, v: float, f0: float, f1: float) -> AudioStreamWAV:
 	return _wav(data)
 
 
+@warning_ignore("integer_division")
 func _mix(a: AudioStreamWAV, b: AudioStreamWAV) -> AudioStreamWAV:
 	var da := a.data
 	var db := b.data

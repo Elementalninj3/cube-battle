@@ -1,0 +1,10 @@
+{
+	"_note": "skin|attack_kind -> clip played by gameplay. Baked from the real procedural animation; edit in the animation editor.",
+	"cubecowboy|fan": "res://animations/cowboy/fan.json",
+	"cubecowboy|punch": "res://animations/cowboy/punch.json",
+	"cubecowboy|rifle": "res://animations/cowboy/rifle.json",
+	"cubeknight|bash": "res://animations/knight/bash.json",
+	"cubeknight|counter": "res://animations/knight/counter.json",
+	"cubeknight|punch": "res://animations/knight/punch.json",
+	"cubeknight|sweep": "res://animations/knight/sweep.json"
+}
