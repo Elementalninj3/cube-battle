@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://bsj8i82ktjs5h"
+path="res://.godot/imported/Flower_3_Single.obj-1dd9457f2054229d1b23a49fc2ddb952.mesh"
+
+[deps]
+
+files=["res://.godot/imported/Flower_3_Single.obj-1dd9457f2054229d1b23a49fc2ddb952.mesh"]
+
+source_file="res://free assets/Stylized Nature MegaKit[Standard]/OBJ/Flower_3_Single.obj"
+dest_files=["res://.godot/imported/Flower_3_Single.obj-1dd9457f2054229d1b23a49fc2ddb952.mesh", "res://.godot/imported/Flower_3_Single.obj-1dd9457f2054229d1b23a49fc2ddb952.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

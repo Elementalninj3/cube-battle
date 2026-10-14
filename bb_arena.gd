@@ -9,6 +9,10 @@ var _mats := {}
 var vfx = null
 var props: Array = []
 var _tick := 0.0
+# Static floor tiles are baked into ONE MultiMesh (1 draw call instead of
+# 104, in both the color and shadow passes). Destructible props stay as
+# individual nodes (wobble/respawn needs per-prop transforms).
+var _static: Array = []
 
 
 func build(p_vfx) -> void:
@@ -52,6 +56,34 @@ func build(p_vfx) -> void:
 		_prop("flower", 10.0, s, [
 			[Vector3(0, 0.15, 0), Vector3(0.06, 0.3, 0.06), Color(0x2a7a35ff)],
 			[Vector3(0, 0.38, 0), Vector3(0.2, 0.2, 0.2), tops[i % 3]]])
+	_bake_statics()
+
+
+func _bake_statics() -> void:
+	if _static.is_empty():
+		return
+	var bm := BoxMesh.new()
+	bm.size = Vector3.ONE
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.85
+	bm.material = mat
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = bm
+	mm.instance_count = _static.size()
+	for i in _static.size():
+		var sd: Dictionary = _static[i]
+		var sp: Vector3 = sd["pos"]
+		var ss: Vector3 = sd["size"]
+		mm.set_instance_transform(i, Transform3D(Basis.from_scale(ss), sp))
+		mm.set_instance_color(i, sd["col"])
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	add_child(mmi)
+	_static.clear()
 
 
 func damage_props(pos: Vector3, radius: float, dmg: float) -> int:
@@ -114,7 +146,7 @@ func _prop(kind: String, hp: float, base: Vector3, parts: Array) -> void:
 
 
 func _tile(pos: Vector3, size: Vector3, col: Color) -> void:
-	_tile_parent(self, pos, size, col)
+	_static.append({"pos": pos, "size": size, "col": col})
 
 
 func _tile_parent(parent: Node3D, pos: Vector3, size: Vector3, col: Color) -> void:

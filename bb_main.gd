@@ -8,11 +8,18 @@ const ArenaScript = preload("res://bb_arena.gd")
 const VfxScript = preload("res://bb_vfx.gd")
 const AudioScript = preload("res://bb_audio.gd")
 const DebugScript = preload("res://bb_debug.gd")
-const AnimEditorScript = preload("res://bb_anim_editor.gd")
+const AIScript = preload("res://bb_ai.gd")
+
+const SETTINGS_PATH := "user://cubebox_settings.cfg"
+const DIFF_NAMES := ["Easy", "Normal", "Hard", "Expert"]
+const SHADOW_NAMES := ["Low", "Medium", "High", "Ultra"]
 
 var SKINS: Array = ["cubecowboy"]
 
-var cfg := [{"skin": 0}, {"skin": 0}]
+var cfg := [{"skin": 0}, {"skin": 0, "cpu": true, "diff": 1}]
+var shadow_quality := 1
+var ai = null
+var _loaded_vol := 0.6
 var state := "menu"
 var now := 0.0
 var hs := 0.0
@@ -55,6 +62,7 @@ var screens := {}
 var sel_panels := []
 var win_label: Label
 var bullets: Array = []
+var clouds: Array = []
 var _bullet_mesh: BoxMesh
 const BULLET_R := 0.75
 
@@ -92,14 +100,17 @@ func _skin_col(sname: String) -> Color:
 			return Color(0.86, 0.22, 0.16)
 		"cubeknight":
 			return Color(0.55, 0.62, 0.72)
+		"ninja":
+			return Color(0.25, 0.25, 0.38)
 		_:
 			return Color(0.23, 0.51, 0.96)
 
 
 func _ready() -> void:
 	SKINS = _scan_skins()
-	if int(cfg[1]["skin"]) >= SKINS.size():
+	if int(cfg[1].get("skin", 0)) >= SKINS.size():
 		cfg[1]["skin"] = 0
+	_load_settings()
 	_bullet_mesh = BoxMesh.new()
 	_bullet_mesh.size = Vector3.ONE
 	_build_env()
@@ -109,12 +120,14 @@ func _ready() -> void:
 	add_child(vfx)
 	audio = AudioScript.new()
 	add_child(audio)
+	audio.vol = _loaded_vol
 	debug = DebugScript.new()
 	add_child(debug)
 	arena.build(vfx)
 	_make_fighters()
 	_build_ui()
 	apply_quality()
+	apply_shadows()
 	to_menu()
 
 
@@ -167,12 +180,20 @@ func _make_fighters() -> void:
 		fighters.append(f)
 	fighters[0].foe = fighters[1]
 	fighters[1].foe = fighters[0]
+	# Ninja mapping: J = light attack (L slot / katana string),
+	# K = heavy attack (H slot), L = kunai throw (S2), P = smoke bomb (S3).
+	# S1 sits on O so every slot stays reachable with no duplicate keys.
 	fighters[0].keys = {"up": [KEY_W], "down": [KEY_S], "left": [KEY_A], "right": [KEY_D],
 		"L": [KEY_J], "H": [KEY_K], "D": [KEY_SPACE],
-		"S1": [KEY_L], "S2": [KEY_O], "S3": [KEY_P]}
+		"S1": [KEY_O], "S2": [KEY_L], "S3": [KEY_P]}
 	fighters[1].keys = {"up": [KEY_UP], "down": [KEY_DOWN], "left": [KEY_LEFT], "right": [KEY_RIGHT],
 		"L": [KEY_KP_1, KEY_COMMA], "H": [KEY_KP_2, KEY_PERIOD], "D": [KEY_SHIFT, KEY_SLASH],
 		"S1": [KEY_KP_3], "S2": [KEY_KP_4], "S3": [KEY_KP_5]}
+	if ai == null:
+		ai = AIScript.new()
+		add_child(ai)
+		ai.setup(self, fighters[1], fighters[0], int(cfg[1].get("diff", 1)))
+	_apply_cpu_flag()
 	_pv()
 
 
@@ -182,6 +203,14 @@ func _pv() -> void:
 		f.v = Vector3.ZERO
 
 
+func _apply_cpu_flag() -> void:
+	var cpu := bool(cfg[1].get("cpu", false))
+	fighters[1].ai_enabled = cpu
+	if ai != null:
+		ai.set_difficulty(int(cfg[1].get("diff", 1)))
+		ai.reset_ai()
+
+
 func _setup_fighters() -> void:
 	for i in 2:
 		fighters[i].setup_skin(_skin_key(i))
@@ -189,10 +218,12 @@ func _setup_fighters() -> void:
 
 func start_match() -> void:
 	_setup_fighters()
+	_apply_cpu_flag()
 	fighters[0].reset_match(Vector3(-2.0, 0, 2.0), atan2(4.0, -4.0))
 	fighters[1].reset_match(Vector3(2.0, 0, -2.0), atan2(-4.0, 4.0))
 	vfx.clear_all()
 	_clear_bullets()
+	_clear_clouds()
 	ts = 1.0
 	hs = 0.0
 	shake = 0.0
@@ -214,6 +245,7 @@ func ko(f) -> void:
 	f.st = "ko"
 	f.hp = 0.0
 	f.visible = false
+	f.clear_stuck()
 	var p: Vector3 = Vector3(f.position.x, maxf(0.6, f.position.y), f.position.z)
 	vfx.burst(p, f.body_col, 34, 8.0, 0.2, 0.9)
 	vfx.burst(p, Color.WHITE, 8, 5.0, 0.1, 0.5)
@@ -275,9 +307,13 @@ func _physics_process(dt: float) -> void:
 				cd.text = ""
 		var a = fighters[0]
 		var b = fighters[1]
+		if ai != null:
+			ai.update(sd, state == "play")
 		a.upd(sd, state == "play")
 		b.upd(sd, state == "play")
 		_upd_bullets(sd)
+		_upd_clouds(sd)
+		_upd_stuck(sd, state == "play")
 		if String(a.st) != "dash" and String(b.st) != "dash" and String(a.st) != "ko" and String(b.st) != "ko":
 			var dx: float = b.position.x - a.position.x
 			var dz: float = b.position.z - a.position.z
@@ -374,26 +410,55 @@ func _cam_upd(dt: float) -> void:
 # Real travelling bullets: spawned at the muzzle with a fixed velocity,
 # integrated every physics frame, damaged only on physical intersection.
 
+# Two shared bullet materials (small/big use fixed colors) instead of one
+# new material per shot: avoids shader recompiles and per-frame allocations
+# during fan-fire (6 shots per S1).
+var _bullet_mats := {}
+
+
+func _bullet_mat(big: bool, bc: Color) -> StandardMaterial3D:
+	var key := ("big" if big else "small") + bc.to_html()
+	if not _bullet_mats.has(key):
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.albedo_color = bc
+		m.emission_enabled = true
+		m.emission = bc
+		_bullet_mats[key] = m
+	return _bullet_mats[key]
+
+
 func fire_bullet(owner: Node3D, mpos: Vector3, dir: Vector3, cfg: Dictionary) -> void:
-	var mi := MeshInstance3D.new()
-	mi.mesh = _bullet_mesh
+	# Ninja kunai are full procedural kunai scenes (same design as the held
+	# props): tip at origin along +Z, aimed along the velocity at spawn and
+	# held straight (tip first, no spin) for the whole flight, then
+	# reparented whole into the victim on impact. Other bullets stay
+	# pooled box tracers.
+	var mi: Node3D = null
 	var sp: float = float(cfg.get("speed", 22.0))
-	mi.scale = Vector3(0.09, 0.09, 0.28 + sp * 0.012)
-	mi.rotation.y = atan2(dir.x, dir.z)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	var bc: Color = cfg.get("col", Color(1.0, 0.8, 0.35))
-	mat.albedo_color = bc
-	mat.emission_enabled = true
-	mat.emission = bc
-	mi.material_override = mat
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if bool(cfg.get("kunai", false)):
+		mi = FighterScript.make_kunai_node()
+		mi.scale = Vector3.ONE * FighterScript.NINJA_KUNAI_THROWN_SCALE
+		mi.rotation.y = atan2(dir.x, dir.z)
+		for ch in (mi as Node).get_children():
+			if ch is GeometryInstance3D:
+				(ch as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	else:
+		var bx := MeshInstance3D.new()
+		bx.mesh = _bullet_mesh
+		bx.scale = Vector3(0.09, 0.09, 0.28 + sp * 0.012)
+		bx.rotation.y = atan2(dir.x, dir.z)
+		bx.material_override = _bullet_mat(bool(cfg.get("big", false)), bc)
+		bx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi = bx
 	add_child(mi)
 	mi.position = mpos
 	bullets.append({"node": mi, "p": mpos, "v": dir.normalized() * sp,
 		"life": float(cfg.get("life", 0.45)), "dmg": float(cfg.get("dmg", 4.0)),
 		"kb": float(cfg.get("kb", 2.5)), "vy": float(cfg.get("vy", 2.0)),
 		"stun": float(cfg.get("stun", 0.18)), "big": bool(cfg.get("big", false)),
+		"kunai": bool(cfg.get("kunai", false)),
 		"owner": owner, "col": bc, "trail": 0.0})
 
 
@@ -429,10 +494,16 @@ func _upd_bullets(dt: float) -> void:
 			continue
 		b["p"] = np
 		(b["node"] as Node3D).position = np
+		# Kunai keep their spawn aim (rotation.y points +Z along the flight
+		# direction) with no roll, so they fly perfectly straight, tip first.
 		b["trail"] = float(b["trail"]) - dt
 		if float(b["trail"]) <= 0.0:
-			b["trail"] = 0.07
-			vfx.burst(np, b["col"], 1, 0.3, 0.05, 0.2)
+			# HTML kunai speed trail: 0xbfe3ff spark, life 0.18, every frame.
+			b["trail"] = 0.02 if bool(b.get("kunai", false)) else 0.07
+			if bool(b.get("kunai", false)):
+				vfx.emit(np, Vector3(randf_range(-0.4, 0.4), randf_range(-0.4, 0.4), randf_range(-0.4, 0.4)), Color(0.75, 0.89, 1.0), 0.05, 0.18, 0.0)
+			else:
+				vfx.burst(np, b["col"], 1, 0.3, 0.05, 0.2)
 
 
 func _bullet_hit(i: int, b: Dictionary, f) -> void:
@@ -445,6 +516,11 @@ func _bullet_hit(i: int, b: Dictionary, f) -> void:
 	if float(f.inv) > 0.0:
 		_kill_bullet(i, false)
 		vfx.burst((f as Node3D).position + Vector3(0, 0.9, 0), Color.WHITE, 4, 3.0, 0.07, 0.3)
+		return
+	# Ninja kunai sticks into the victim and detonates after a fuse
+	# (html/ninjasetup.html) instead of dealing damage on impact.
+	if bool(b.get("kunai", false)):
+		_stick_kunai(i, f)
 		return
 	var dmg: float = float(b["dmg"])
 	f.hp = maxf(0.0, float(f.hp) - dmg)
@@ -461,12 +537,148 @@ func _bullet_hit(i: int, b: Dictionary, f) -> void:
 	f.flash = 0.14
 	f.atk = null
 	var hp_pos: Vector3 = (f as Node3D).position + Vector3(0, 0.9, 0)
+	vfx.damage_number((f as Node3D).position + Vector3(0, 2.0, 0), str(int(dmg)),
+		Color.WHITE if big else Color(0.85, 0.75, 1.0), big)
 	vfx.flash(hp_pos, 0.9 if big else 0.55, Color.WHITE)
 	vfx.burst(hp_pos, own.body_col, 16 if big else 7, 7.0 if big else 4.5, 0.1, 0.45)
 	hs = maxf(hs, 0.1 if big else 0.03)
 	shake = maxf(shake, (0.35 if big else 0.12) * shake_amt)
 	audio.play("hitH" if big else "hitL")
 	_kill_bullet(i, true)
+
+
+func _stick_kunai(i: int, f) -> void:
+	# HTML kunai hit: the live projectile stops flying and embeds in the
+	# target (kept as a child so it rides movement until detonation frees
+	# it), 10 sparks (white/gold), shake 0.15, fuse 0.9 (chain 0.5).
+	var b: Dictionary = bullets[i]
+	var node := b["node"] as Node3D
+	var at: Vector3 = b["p"]
+	bullets.remove_at(i)
+	f.attach_stuck(node)
+	vfx.burst(at, b["col"], 4, 3.0, 0.07, 0.3)
+	var chest: Vector3 = (f as Node3D).position + Vector3(0, 0.9, 0)
+	for s in 10:
+		var sc := Color.WHITE if s % 2 == 0 else Color(1.0, 0.83, 0.48)
+		vfx.emit(chest, Vector3(randf_range(-2.5, 2.5), randf_range(1.0, 5.0), randf_range(-2.5, 2.5)), sc, 0.06, randf_range(0.3, 0.5), 10.0)
+	audio.play("hitL")
+	shake = maxf(shake, 0.15 * shake_amt)
+
+
+# Sticky-kunai fuses: accelerating red blink, then detonation. Nearby
+# stuck bombs chain with a short fuse, like the reference.
+func _upd_stuck(dt: float, play: bool) -> void:
+	if not play:
+		return
+	for f in fighters:
+		if String(f.st) == "ko" or not (f as Node3D).visible:
+			f.clear_stuck()
+			continue
+		for i in range(f.stuck.size() - 1, -1, -1):
+			var s: Dictionary = f.stuck[i]
+			s["t"] = float(s["t"]) + dt
+			var fuse := maxf(float(s["fuse"]), 0.01)
+			f.flash = maxf(float(f.flash), 0.05)
+			if float(s["t"]) >= fuse:
+				# The expired kunai's own embedded mesh goes with the blast
+				# too (it is already out of `stuck` when _detonate frees
+				# the rest), so no visible kunai survives the detonation.
+				f.stuck.remove_at(i)
+				var expired: Node3D = s.get("node", null)
+				if expired != null and is_instance_valid(expired):
+					expired.queue_free()
+				_detonate(f)
+
+
+func _detonate(victim) -> void:
+	# HTML explode(): hot flash (3.4, 0.35) + white core (1.8, 0.16),
+	# orange ring, light pop (energy 3, range 12), 16 debris, 30 sparks,
+	# scorch (r 1.5, life 3), shake 0.5. Smoke thinned for readability
+	# (7 billowing puffs instead of 14, 5 dust instead of 10); damage,
+	# radius, flashes, ring, debris, sparks and scorch are unchanged.
+	# Every kunai stuck in anyone caught by the blast is consumed by it,
+	# so no embedded kunai survive the detonation visibly.
+	var at: Vector3 = (victim as Node3D).position
+	var bp := Vector3(at.x, maxf(at.y, 0.0) + 0.6, at.z)
+	# 1:1 port of HTML explode(): flash sphere (size 3.4, 0.35 s, hot
+	# 0xfff2b0 -> cool 0xff4a12) + white-hot core (1.8, 0.16 s), orange
+	# shockwave ring (0.45 s), light pop (0xff9a4d, 3, range 12, 0.25 s),
+	# 16 debris, 30 sparks, scorch disc (r 1.5, 3 s), shake 0.5.
+	# Smoke only is thinned (~50% fewer puffs, lower opacity); damage,
+	# radius and all signature effects are unchanged.
+	# (MultiMesh particles can't spin like the HTML debris; sizes, speeds,
+	# gravity and lifetimes match.)
+	vfx.blast_flash(bp, 3.4, Color(1.0, 0.95, 0.69), Color(1.0, 0.29, 0.07), 0.35, false)
+	vfx.blast_flash(bp, 1.8, Color.WHITE, Color.WHITE, 0.16, true)
+	vfx.light_pop(bp, Color(1.0, 0.6, 0.3), 3.0, 0.25)
+	vfx.ring(Vector3(at.x, 0.05, at.z), Color(1.0, 0.54, 0.24), 0.5, 5.5, 0.45, 0.8, true)
+	for j in 16:
+		var da := randf() * TAU
+		var dsp := 3.0 + randf() * 5.0
+		vfx.emit(bp, Vector3(cos(da) * dsp, 3.0 + randf() * 5.0, sin(da) * dsp),
+			Color(1.0, 0.54, 0.24) if randf() < 0.5 else Color(1.0, 0.82, 0.48),
+			0.1 + randf() * 0.15, 0.7, 20.0)
+	for k in 7:
+		var sa := randf() * TAU
+		var ssp := 0.8 + randf() * 2.2
+		vfx.puff(bp + Vector3(randf_range(-0.25, 0.25), randf() * 0.4, randf_range(-0.25, 0.25)),
+			Color(0.42, 0.23, 0.11), 0.5 + randf() * 0.4, 1.2 + randf() * 0.7, 0.0,
+			2.2, 0.6, Color(0.17, 0.17, 0.2),
+			Vector3(cos(sa) * ssp, 1.5 + randf() * 2.5, sin(sa) * ssp))
+	for n in 5:
+		var na := (float(n) / 5.0) * TAU + randf() * 0.4
+		var nsp := 4.0 + randf() * 3.0
+		vfx.puff(Vector3(at.x, 0.15, at.z), Color(0.72, 0.65, 0.54),
+			0.3 + randf() * 0.25, 0.7 + randf() * 0.3, 0.0,
+			2.5, 0.5, Color(0.43, 0.42, 0.46),
+			Vector3(cos(na) * nsp, 0.3, sin(na) * nsp))
+	for q in 30:
+		var qa := randf() * TAU
+		var qsp := 6.0 + randf() * 6.0
+		vfx.emit(bp, Vector3(cos(qa) * qsp, 2.0 + randf() * 7.0, sin(qa) * qsp),
+			Color(1.0, 0.76, 0.3) if randf() < 0.5 else Color(1.0, 0.48, 0.16),
+			0.06 + randf() * 0.07, 0.4 + randf() * 0.5, 10.0)
+	vfx.scorch(Vector3(at.x, 0.0, at.z), 3.0, 1.5)
+	audio.play("boom")
+	shake = maxf(shake, 0.5 * shake_amt)
+	hs = maxf(hs, 0.09)
+	for s in victim.stuck:
+		var sn: Node3D = s.get("node", null)
+		if sn != null and is_instance_valid(sn):
+			sn.queue_free()
+	victim.stuck.clear()
+	for f in fighters:
+		if String(f.st) == "ko" or not (f as Node3D).visible:
+			continue
+		var dx: float = (f as Node3D).position.x - at.x
+		var dz: float = (f as Node3D).position.z - at.z
+		var d := Vector2(dx, dz).length()
+		if d > FighterScript.BLAST_R:
+			continue
+		if f != victim and float(f.inv) > 0.0:
+			vfx.burst((f as Node3D).position + Vector3(0, 0.9, 0), Color.WHITE, 4, 3.0, 0.07, 0.3)
+			continue
+		f.hp = maxf(0.0, float(f.hp) - FighterScript.BLAST_DMG)
+		f.dmg += FighterScript.BLAST_DMG
+		vfx.damage_number((f as Node3D).position + Vector3(0, 2.0, 0), str(int(FighterScript.BLAST_DMG)), Color.WHITE, true)
+		var kk := 10.0 * 0.55 / float(f.mass)
+		var dir := Vector3(dx / maxf(d, 0.01), 0, dz / maxf(d, 0.01))
+		f.v = Vector3(dir.x * kk, 0, dir.z * kk)
+		f.vy = 6.0
+		f.st = "stun"
+		f.t = 0.0
+		f.stun = 0.4
+		f.flash = 0.14
+		f.atk = null
+		vfx.flash((f as Node3D).position + Vector3(0, 0.9, 0), 0.9, Color.WHITE)
+		# The blast consumes every kunai stuck in anyone it catches, so no
+		# embedded kunai stay visible after the detonation. Stickers outside
+		# the blast keep their own fuses and still go off in their own spot.
+		for s in f.stuck:
+			var sn2: Node3D = s.get("node", null)
+			if sn2 != null and is_instance_valid(sn2):
+				sn2.queue_free()
+		f.stuck.clear()
 
 
 func _kill_bullet(i: int, impacted: bool) -> void:
@@ -481,6 +693,146 @@ func _clear_bullets() -> void:
 	for b in bullets:
 		(b["node"] as Node3D).queue_free()
 	bullets.clear()
+
+
+# ---------- SMOKE CLOUDS (ninja S3) ----------
+# Lingering tick-damage zones from html/ninjasetup.html: they chip HP of
+# anyone but the owner standing inside, with no stun-lock.
+
+func deploy_cloud(owner: Node3D, pos: Vector3, radius: float, life: float,
+		tick: float, dmg: float, col: Color) -> void:
+	# HTML releaseBomb/burst: bomb arcs hand->landing over 0.55 s with peak
+	# 6*u*(1-u), spinning, trailing gray puffs + sparks; bursts early if it
+	# touches a foe, else on landing.
+	var from := (owner as Node3D).position + Vector3(0, 0.8, 0)
+	clouds.append({"owner": owner, "from": from, "p": pos, "r": radius,
+		"life": life, "delay": 0.55, "landed": false, "bomb": null,
+		"tick": tick, "tick_t": 0.3, "ticks": 0, "puff_t": 0.0, "dmg": dmg, "col": col})
+
+
+func _cloud_bomb() -> MeshInstance3D:
+	# Procedural flying bomb: dark sphere like the held prop.
+	var bm := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = 0.17
+	sm.height = 0.34
+	bm.mesh = sm
+	var m := StandardMaterial3D.new()
+	m.albedo_color = Color(0.10, 0.06, 0.19)
+	m.roughness = 0.5
+	m.emission_enabled = true
+	m.emission = Color(0.33, 0.33, 0.38)
+	m.emission_energy_multiplier = 0.6
+	bm.material_override = m
+	bm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return bm
+
+
+func _upd_clouds(dt: float) -> void:
+	for i in range(clouds.size() - 1, -1, -1):
+		var c: Dictionary = clouds[i]
+		var p: Vector3 = c["p"]
+		var r: float = c["r"]
+		if not bool(c["landed"]):
+			c["delay"] = float(c["delay"]) - dt
+			var u := clampf(1.0 - float(c["delay"]) / 0.55, 0.0, 1.0)
+			var bp: Vector3 = (c["from"] as Vector3).lerp(p, u) + Vector3(0, 6.0 * u * (1.0 - u), 0)
+			# Visible spinning bomb mesh along the arc (freed at burst).
+			if c["bomb"] == null or not is_instance_valid(c["bomb"]):
+				c["bomb"] = _cloud_bomb()
+				add_child(c["bomb"])
+			(c["bomb"] as Node3D).position = bp
+			(c["bomb"] as Node3D).rotation.x += 14.0 * dt
+			(c["bomb"] as Node3D).rotation.z += 9.0 * dt
+			vfx.puff(bp, Color(0.71, 0.71, 0.74), 0.14, 0.5, 0.3)
+			if randf() < 0.6:
+				vfx.emit(bp, Vector3(0, 0.5, 0), Color(0.78, 0.78, 0.82), 0.05, 0.25, 0.0)
+			# Reference: the flying bomb bursts early if it touches a foe.
+			var early := false
+			for f in fighters:
+				if f == c["owner"] or String(f.st) == "ko" or not (f as Node3D).visible:
+					continue
+				var fdx: float = (f as Node3D).position.x - bp.x
+				var fdz: float = (f as Node3D).position.z - bp.z
+				if Vector2(fdx, fdz).length() < 1.2 and bp.y < 2.0:
+					c["p"] = Vector3((f as Node3D).position.x, 0, (f as Node3D).position.z)
+					p = c["p"]
+					early = true
+					break
+			if float(c["delay"]) <= 0.0 or early:
+				c["landed"] = true
+				if c["bomb"] != null and is_instance_valid(c["bomb"]):
+					(c["bomb"] as Node).queue_free()
+				c["bomb"] = null
+			# HTML burst(): white flash (size 2.6), gray ring to 9,
+			# 22 puffs, 20 sparks, shake 0.3, then disc/edge/dome cloud.
+			# Visual-density reduction (smoke only): the initial burst uses
+			# ~45% fewer smoke puffs (16 instead of 30) with slightly
+			# smaller, more transparent puffs. Flash, ground ring, sparks,
+			# damage radius, ticks, lifetime and cooldown are unchanged.
+			vfx.flash(p + Vector3(0, 0.5, 0), 1.3, Color.WHITE)
+			# Subtle landing ring only (no stacked grey discs).
+			vfx.ring(Vector3(p.x, 0.05, p.z), Color(0.78, 0.78, 0.82), 0.3, 9.0, 0.55, 0.2)
+			for j in 16:
+				var a := randf() * TAU
+				var sp := randf_range(2.0, 5.0)
+				vfx.puff(p + Vector3(0, 0.3, 0), Color(0.71, 0.71, 0.74), randf_range(0.45, 0.7), randf_range(1.0, 1.6), 1.0, 0.0, 0.55)
+				vfx.emit(p + Vector3(0, 0.3, 0), Vector3(cos(a) * sp, randf_range(0.5, 1.5), sin(a) * sp), Color(0.71, 0.71, 0.74), 0.1, 0.8, 2.0)
+			for k in 26:
+				var a2 := randf() * TAU
+				var sp2 := randf_range(4.0, 8.0)
+				vfx.emit(p + Vector3(0, 0.5, 0), Vector3(cos(a2) * sp2, randf_range(2.0, 7.0), sin(a2) * sp2), Color(0.83, 0.83, 0.85), 0.07, 0.5, 10.0)
+				audio.play("hitH")
+				shake = maxf(shake, 0.3 * shake_amt)
+			continue
+		c["life"] = float(c["life"]) - dt
+		if float(c["life"]) <= 0.0:
+			clouds.remove_at(i)
+			continue
+		c["puff_t"] = float(c["puff_t"]) - dt
+		if float(c["puff_t"]) <= 0.0:
+			# Throttled ~45% vs the old 0.07 s cadence so the lingering
+			# cloud stays readable: fewer, slightly smaller and more
+			# transparent puffs. Lifetime, radius, tick damage and
+			# cooldown are unchanged.
+			c["puff_t"] = 0.13
+			var a := randf() * TAU
+			var rr := sqrt(randf()) * r * 0.95
+			var fade := clampf(float(c["life"]) / 0.8, 0.0, 1.0)
+			if fade <= 0.0:
+				fade = 1.0
+			vfx.puff(p + Vector3(cos(a) * rr, randf_range(0.1, 0.6), sin(a) * rr),
+				Color(0.71, 0.71, 0.74), randf_range(0.6, 1.05), randf_range(1.6, 2.6), randf_range(0.35, 0.85), 0.0, 0.45)
+			if randf() < 0.35 * fade:
+				vfx.emit(p + Vector3(cos(a) * rr, 0.2, sin(a) * rr), Vector3(0, randf_range(0.8, 1.4), 0), Color(0.61, 1.0, 0.69), 0.05, 1.2, 0.0)
+		c["tick_t"] = float(c["tick_t"]) - dt
+		if float(c["tick_t"]) > 0.0:
+			continue
+		c["tick_t"] = float(c["tick"])
+		c["ticks"] = int(c["ticks"]) + 1
+		# Subtle tick pulse: ring only every second tick, low alpha.
+		if int(c["ticks"]) % 2 == 0:
+			vfx.ring(Vector3(p.x, 0.06, p.z), c["col"], 0.3, r, 0.4, 0.3)
+		vfx.burst(p + Vector3(0, 0.5, 0), Color(0.61, 1.0, 0.69), 4, 2.0, 0.06, 0.4)
+		for f in fighters:
+			if f == c["owner"] or String(f.st) == "ko" or not (f as Node3D).visible:
+				continue
+			if float(f.inv) > 0.0:
+				continue
+			var dx: float = (f as Node3D).position.x - p.x
+			var dz: float = (f as Node3D).position.z - p.z
+			if Vector2(dx, dz).length() > r:
+				continue
+			var dmg: float = float(c["dmg"])
+			f.hp = maxf(0.0, float(f.hp) - dmg)
+			f.dmg += dmg
+			f.flash = 0.1
+			vfx.damage_number((f as Node3D).position + Vector3(0, 2.0, 0), str(int(dmg)), Color(0.61, 1.0, 0.69), false)
+			vfx.burst((f as Node3D).position + Vector3(0, 0.9, 0), c["col"], 4, 2.5, 0.08, 0.3)
+
+
+func _clear_clouds() -> void:
+	clouds.clear()
 
 
 # ---------- UI ----------
@@ -584,7 +936,7 @@ func _build_ui() -> void:
 	var mb: VBoxContainer = screens["menu"]["box"]
 	mb.add_child(_title_label("BLOCK BRAWL", 96))
 	_btn(mb, "Play local 1v1", "play", true)
-	_btn(mb, "Animation Editor", "anim_editor")
+	_btn(mb, "Open World", "openworld")
 	_btn(mb, "Settings", "set")
 	# select
 	_screen("select")
@@ -606,7 +958,7 @@ func _build_ui() -> void:
 	_btn(row2, "Start match", "start", true)
 	_btn(row2, "Back", "menu")
 	var hint := Label.new()
-	hint.text = "P1: WASD move, J light, K heavy, L dash-atk, O uppercut, P spin, Space dash. P2: arrows, ,/. attacks, Numpad3/4/5 specials, Shift or / dash. Esc pauses. Cooldowns: yellow=L, orange=O, purple=P. Cowboy kit: L fan-fire (6 shots), O rifle (heavy), P horse ride. Knight kit: L shield counter, O shield bash, P sword sweep."
+	hint.text = "P1: WASD move, J light, K heavy, L kunai/special-2, O special-1, P smoke/special-3, Space dash. P2: arrows, ,/. attacks, Numpad3/4/5 specials, Shift or / dash. Esc pauses. Cooldowns: yellow=O, orange=L, purple=P. Ninja kit: J katana string, K heavy, L kunai throw, P smoke bomb. Cowboy kit: O fan-fire (6 shots), L rifle (heavy), P horse ride. Knight kit: O shield counter, L shield bash, P sword sweep."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(560, 0)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -636,19 +988,21 @@ func _build_ui() -> void:
 	grid.add_theme_constant_override("h_separation", 16)
 	grid.add_theme_constant_override("v_separation", 10)
 	stb.add_child(grid)
-	var sv := _slider(grid, "Sound volume", 60)
-	sv.value_changed.connect(func(_v: float) -> void: audio.vol = sv.value / 100.0)
-	var ss := _slider(grid, "Screen shake", 60)
-	ss.value_changed.connect(func(_v: float) -> void: shake_amt = ss.value / 100.0)
+	var sv := _slider(grid, "Sound volume", int(_loaded_vol * 100.0))
+	sv.value_changed.connect(func(_v: float) -> void: audio.vol = sv.value / 100.0; _save_settings())
+	var ss := _slider(grid, "Screen shake", int(shake_amt * 100.0))
+	ss.value_changed.connect(func(_v: float) -> void: shake_amt = ss.value / 100.0; _save_settings())
 	_opt(grid)
+	_shadow_opt(grid)
 	var sf := CheckBox.new()
 	sf.text = "Show FPS"
-	sf.button_pressed = true
+	sf.button_pressed = show_fps
 	var sl := Label.new()
 	sl.text = "Show FPS"
 	grid.add_child(sl)
 	grid.add_child(sf)
-	sf.toggled.connect(func(on: bool) -> void: show_fps = on; fps.visible = on)
+	fps.visible = show_fps
+	sf.toggled.connect(func(on: bool) -> void: show_fps = on; fps.visible = on; _save_settings())
 	var hb_lab := Label.new()
 	hb_lab.text = "Show Hitboxes (F1)"
 	grid.add_child(hb_lab)
@@ -800,16 +1154,105 @@ func _opt(grid: GridContainer) -> void:
 	o.add_item("Low", 0)
 	o.add_item("Medium", 1)
 	o.add_item("High", 2)
-	o.selected = 2
+	o.selected = clampi(quality, 0, 2)
 	grid.add_child(o)
-	o.item_selected.connect(func(idx: int) -> void: quality = idx; apply_quality())
+	o.item_selected.connect(func(idx: int) -> void: quality = idx; apply_quality(); _save_settings())
+
+
+func _shadow_opt(grid: GridContainer) -> void:
+	var l := Label.new()
+	l.text = "Shadow Quality"
+	grid.add_child(l)
+	var o := OptionButton.new()
+	for si in SHADOW_NAMES.size():
+		o.add_item(SHADOW_NAMES[si], si)
+	o.selected = clampi(shadow_quality, 0, SHADOW_NAMES.size() - 1)
+	grid.add_child(o)
+	o.item_selected.connect(_on_shadow_selected)
 
 
 func apply_quality() -> void:
 	vfx.set_cap([60, 100, 100][clampi(quality, 0, 2)])
-	sun.shadow_enabled = quality > 0
 	var sc: float = [0.85, 1.0, 1.0][clampi(quality, 0, 2)]
 	get_viewport().set("scaling_3d_scale", sc)
+	# MSAA is the biggest fix for jagged block edges in the Compatibility
+	# renderer (it has no TAA/FSR). Capped at 2x everywhere: 4x crashes
+	# some Windows drivers and most mobile GPUs when set at startup, and
+	# 2x already removes nearly all edge shimmer on these blocky meshes.
+	if clampi(quality, 0, 2) <= 0:
+		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
+	else:
+		get_viewport().msaa_3d = Viewport.MSAA_2X
+	apply_shadows()
+
+
+# Shadow Quality (Low/Medium/High/Ultra, Medium default). Tuned for soft,
+# clean shadows on the blocky art: tight PSS range over the 10x10 arena
+# (denser texels = less shimmer), blended splits, blur for soft edges,
+# bias/normal-bias balanced against acne vs. detached shadows, and full
+# opacity so characters stay visually grounded. Graphics Low forces shadows
+# off entirely (existing performance guarantee).
+# NOTE: the Compatibility renderer has no SSAO/SSIL/SDFGI/glow, so softness
+# comes from blur + MSAA + tight range rather than those effects.
+func apply_shadows() -> void:
+	if sun == null:
+		return
+	if quality <= 0:
+		sun.shadow_enabled = false
+		return
+	sun.shadow_enabled = true
+	var q := clampi(shadow_quality, 0, 3)
+	var atlas: int = [1024, 2048, 4096, 4096][q]
+	# NOTE: 8192 was deliberately not used for Ultra: it risks VRAM
+	# exhaustion / driver OOM on Android and weak iGPUs for zero visible
+	# gain on a 10x10 stylized arena. Ultra instead maxes filtering and
+	# tightens range, which is where the visible sharpness comes from.
+	RenderingServer.directional_shadow_atlas_set_size(atlas, false)
+	ProjectSettings.set_setting("rendering/lights_and_shadows/directional_shadow/size", atlas)
+	# ShadowQuality enum: 0 HARD, 1 SOFT_VERY_LOW, 2 SOFT_LOW,
+	# 3 SOFT_MEDIUM, 4 SOFT_HIGH, 5 SOFT_ULTRA (5 skipped: too costly).
+	RenderingServer.directional_soft_shadow_filter_set_quality(q + 1)
+	# DirectionalShadowMode: 0 ORTHOGONAL, 1 PARALLEL_2_SPLITS, 2 PARALLEL_4_SPLITS.
+	sun.directional_shadow_mode = 1 if q == 0 else 2
+	sun.directional_shadow_max_distance = [45.0, 40.0, 35.0, 30.0][q]
+	sun.directional_shadow_blend_splits = q >= 1
+	sun.directional_shadow_pancake_size = [20.0, 16.0, 14.0, 12.0][q]
+	sun.shadow_blur = [1.0, 1.5, 2.0, 2.5][q]
+	sun.shadow_bias = [0.05, 0.04, 0.03, 0.03][q]
+	sun.shadow_normal_bias = [1.5, 1.0, 0.8, 0.6][q]
+	# Full opacity: soft edges, but characters never look like they float.
+	sun.shadow_opacity = 1.0
+
+
+func _on_shadow_selected(idx: int) -> void:
+	shadow_quality = clampi(idx, 0, SHADOW_NAMES.size() - 1)
+	apply_shadows()
+	_save_settings()
+
+
+func _save_settings() -> void:
+	var c := ConfigFile.new()
+	c.set_value("game", "quality", quality)
+	c.set_value("game", "shadow_quality", shadow_quality)
+	c.set_value("game", "volume", audio.vol if audio != null else _loaded_vol)
+	c.set_value("game", "shake", shake_amt)
+	c.set_value("game", "show_fps", show_fps)
+	c.set_value("game", "p2_cpu", bool(cfg[1].get("cpu", false)))
+	c.set_value("game", "p2_diff", int(cfg[1].get("diff", 1)))
+	c.save(SETTINGS_PATH)
+
+
+func _load_settings() -> void:
+	var c := ConfigFile.new()
+	if c.load(SETTINGS_PATH) != OK:
+		return
+	quality = clampi(int(c.get_value("game", "quality", quality)), 0, 2)
+	shadow_quality = clampi(int(c.get_value("game", "shadow_quality", 1)), 0, 3)
+	_loaded_vol = clampf(float(c.get_value("game", "volume", 0.6)), 0.0, 1.0)
+	shake_amt = clampf(float(c.get_value("game", "shake", 0.6)), 0.0, 1.0)
+	show_fps = bool(c.get_value("game", "show_fps", true))
+	cfg[1]["cpu"] = bool(c.get_value("game", "p2_cpu", true))
+	cfg[1]["diff"] = clampi(int(c.get_value("game", "p2_diff", 1)), 0, DIFF_NAMES.size() - 1)
 
 
 func show_screen(sname) -> void:
@@ -821,7 +1264,10 @@ func show_screen(sname) -> void:
 func to_menu() -> void:
 	state = "menu"
 	_clear_bullets()
+	_clear_clouds()
 	_pv()
+	if ai != null:
+		ai.reset_ai()
 	show_screen("menu")
 
 
@@ -831,10 +1277,35 @@ func rs() -> void:
 		for ch in vb.get_children():
 			ch.queue_free()
 		var t := Label.new()
-		t.text = "Player " + str(i + 1)
+		if i == 1 and bool(cfg[1].get("cpu", false)):
+			t.text = "Player 2 (CPU)"
+		else:
+			t.text = "Player " + str(i + 1)
 		t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		t.add_theme_font_size_override("font_size", 22)
 		vb.add_child(t)
+		if i == 1:
+			var mrow := HBoxContainer.new()
+			mrow.alignment = BoxContainer.ALIGNMENT_CENTER
+			mrow.add_theme_constant_override("separation", 8)
+			vb.add_child(mrow)
+			var cpu := bool(cfg[1].get("cpu", false))
+			var mb := Button.new()
+			mb.text = "CPU: ON" if cpu else "CPU: OFF"
+			mb.custom_minimum_size = Vector2(110, 36)
+			mb.set_meta("action", "p2cpu")
+			mb.set_meta("i", 1)
+			mb.set_meta("v", "")
+			mb.pressed.connect(_on_action.bind(mb))
+			mrow.add_child(mb)
+			var dob := OptionButton.new()
+			for di in DIFF_NAMES.size():
+				dob.add_item(DIFF_NAMES[di], di)
+			dob.selected = clampi(int(cfg[1].get("diff", 1)), 0, DIFF_NAMES.size() - 1)
+			dob.disabled = not cpu
+			dob.tooltip_text = "CPU difficulty"
+			dob.item_selected.connect(_on_diff_selected)
+			mrow.add_child(dob)
 		for j in SKINS.size():
 			var sname := str(SKINS[j])
 			var b := Button.new()
@@ -870,12 +1341,17 @@ func _on_action(b: Button) -> void:
 				cfg[1 - i]["skin"] = (int(cfg[1 - i]["skin"]) + 1) % SKINS.size()
 		rs()
 		_pv()
+	elif a == "p2cpu":
+		cfg[1]["cpu"] = not bool(cfg[1].get("cpu", false))
+		_apply_cpu_flag()
+		_save_settings()
+		rs()
 	elif a == "start" or a == "restart":
 		start_match()
+	elif a == "openworld":
+		get_tree().change_scene_to_file("res://openworld/ow_world.tscn")
 	elif a == "menu":
 		to_menu()
-	elif a == "anim_editor":
-		get_tree().change_scene_to_file("res://animation_editor.tscn")
 	elif a == "resume":
 		toggle_pause()
 	elif a == "set":
@@ -883,3 +1359,10 @@ func _on_action(b: Button) -> void:
 		show_screen("settings")
 	elif a == "back":
 		show_screen(from)
+
+
+func _on_diff_selected(idx: int) -> void:
+	cfg[1]["diff"] = clampi(idx, 0, DIFF_NAMES.size() - 1)
+	_apply_cpu_flag()
+	_save_settings()
+	rs()

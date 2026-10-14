@@ -54,167 +54,64 @@ const ATK_RIFLE := {"w": 0.35, "a": 0.15, "r": 0.5, "dmg": 24.0, "kb": 12.0, "sp
 const ATK_COUNTER := {"w": 0.2, "a": 0.5, "r": 0.4, "dmg": 0.0, "kb": 0.0, "lunge": 0.0, "sh": 0.0, "hs": 0.0, "vy": 0.0, "kind": "counter", "big": false, "radial": false, "cd": 5.0}
 const ATK_BASH := {"w": 0.3, "a": 0.2, "r": 0.45, "dmg": 12.0, "kb": 10.0, "range": 2.4, "arc": 0.3, "lunge": 0.0, "sh": 0.25, "hs": 0.07, "vy": 5.0, "kind": "bash", "big": true, "radial": false, "cd": 6.0}
 const ATK_SWEEP := {"w": 0.35, "a": 0.3, "r": 0.45, "dmg": 16.0, "kb": 9.0, "lunge": 0.0, "sh": 0.2, "hs": 0.06, "vy": 5.0, "kind": "sweep", "big": true, "radial": false, "cd": 7.0}
+# Ninja kit: faithful 1:1 port of html/ninjasetup.html ("Shadow Block").
+# Mapping to this game's slots: D = shadow dash (HTML J), S3 = smoke bomb
+# (HTML K), S2 = kunai throw (HTML L), S1 = katana slash (HTML G).
+# NOTE: the HTML G is a SINGLE slash (T=0.55, rel=0.14, trail 0.1-0.34),
+# not a 3-hit combo; no combo timings exist in the source to port.
+# HTML numbers: SPEED 5, DASH 22/0.2/0.7, KUNAI 22/cd 0.25, SMOKE cd 4,
+# CLOUD r 3.8/life 5.5/tick 0.5/dmg 12, SLASH dmg 35/cd 0.6/range 2.6.
+const NINJA_SPEED := 5.0
+const NINJA_DASH_SPEED := 22.0
+const NINJA_DASH_TIME := 0.2
+const NINJA_DASH_CD := 0.7
+# Shadow dash strike: dashing through the foe deals light damage once per
+# dash (with the usual stun/knockback, no hitstop). Dashing into a knight's
+# open counter is punished like any other melee hit.
+const NINJA_DASH_DMG := 8.0
+const NINJA_DASH_KB := 6.0
+const NINJA_DASH_RANGE := 1.1
+# Kunai flight speed: HTML reference is 22 u/s, but at 1v1 ranges (4-9 m)
+# that crosses in ~0.25 s and reads as instant. Deliberately reduced to a
+# still-fast value so travel, spin and trail stay visible. Cooldown stays 0.25.
+const NINJA_KUNAI_REF_SPEED := 22.0
+const NINJA_KUNAI_SPEED := 16.0
+const NINJA_KUNAI_CD := 0.25
+const NINJA_KUNAI_THROWN_SCALE := 1.4
+const NINJA_KUNAI_HELD_SCALE := 0.65
+const NINJA_SMOKE_CD := 4.0
+# M1 katana string (durations / damage / release / wind-up / windows /
+# lunges / ranges / continuation 0.4 s / finisher cd 0.4 s as specified).
+const NINJA_SLASH1 := {"w": 0.10, "a": 0.24, "r": 0.16, "dmg": 7.0, "kb": 6.0, "range": 2.6, "arc": 0.3, "lunge": 3.0, "lunge0": 0.08, "lunge1": 0.30, "sh": 0.2, "hs": 0.05, "vy": 0.0, "kind": "slash1", "big": false, "radial": false, "cd": 0.0}
+const NINJA_SLASH2 := {"w": 0.06, "a": 0.26, "r": 0.18, "dmg": 7.0, "kb": 6.5, "range": 2.8, "arc": 0.3, "lunge": 3.5, "lunge0": 0.06, "lunge1": 0.28, "sh": 0.22, "hs": 0.05, "vy": 0.0, "kind": "slash2", "big": false, "radial": false, "cd": 0.0}
+const NINJA_SLASH3 := {"w": 0.38, "a": 0.10, "r": 0.30, "dmg": 13.0, "kb": 9.0, "range": 3.2, "arc": 0.0, "lunge": 6.0, "lunge0": 0.28, "lunge1": 0.40, "sh": 0.35, "hs": 0.09, "vy": 4.0, "kind": "slash3", "big": true, "radial": true, "cd": 0.0}
+const NINJA_COMBO_WINDOW := 0.4
+const NINJA_FINISH_CD := 0.4
+const ATK_KUNAI := {"w": 0.11, "a": 0.05, "r": 0.18, "dmg": 0.0, "kb": 0.0, "speed": NINJA_KUNAI_SPEED, "life": 2.0, "lunge": 0.0, "sh": 0.05, "hs": 0.0, "vy": 0.0, "kind": "kunai", "big": false, "radial": false, "cd": 0.25}
+# HTML POSE table (hand wind-up/release/return targets). A/B = throwing-hand
+# wind-up/release poses, off = off-hand pose. Mirrors ninjasetup.html.
+const NJ_POSE_KUNAI := {"T": 0.34, "rel": 0.11, "wind": 0.07, "A": [0.85, 0.45, -0.5], "B": [0.3, 0.15, 1.05], "off": [0.7, -0.05, -0.25]}
+const NJ_POSE_SMOKE := {"T": 0.55, "rel": 0.27, "wind": 0.17, "A": [0.7, 0.8, -0.35], "B": [0.28, 0.3, 1.0], "off": [0.9, 0.35, 0.35]}
+const NJ_POSE_SLASH := {"T": 0.55, "rel": 0.14, "wind": 0.1, "A": [0.7, 0.0, 0.0], "B": [0.7, 0.0, 0.0], "off": [0.7, 0.0, 0.0]}
+# Sticky-kunai detonation (mirrors html/ninjasetup.html fuse/chain logic).
+# NOTE: the reference kills outright on detonation; here the blast deals
+# heavy AoE instead so 1v1 rounds stay winnable from any state.
+const STICK_FUSE := 0.9
+const CHAIN_FUSE := 0.5
+const BLAST_R := 2.6
+const BLAST_DMG := 16.0
+const ATK_SMOKE := {"w": 0.27, "a": 0.05, "r": 0.23, "dmg": 0.0, "kb": 0.0, "range": 2.0, "arc": 0.0, "lunge": 0.0, "sh": 0.15, "hs": 0.0, "vy": 0.0, "kind": "smoke", "big": false, "radial": false, "cd": 4.0}
+const NINJA_CLOUD_R := 3.8
+const NINJA_CLOUD_LIFE := 5.5
+const NINJA_CLOUD_TICK := 0.5
+const NINJA_CLOUD_DMG := 3.0
+const KUNAI_REST := Vector3(0.05, 0.05, 0.2)
 const COUNTER_DMG := 14.0
 const COUNTER_KB := 9.0
 const SHIELD_REST := Vector3(-0.05, 0.05, 0.22)
 static var _prop_scenes := {}
-# Attack Animator overrides: key "skin|kind|phase" (phase 0=windup,1=active,2=recover)
-# values are ADDITIVE deltas (0 = no change). Edited in menu Attack Animator.
-static var ANIM_OV := {}
-const ANIM_SAVE_PATH := "user://anim_overrides.json"
-const ANIM_FIELDS := ["lean", "sq", "twist", "e0", "e1", "u0", "u1",
-	"arm_scale", "sword_rx", "sword_ry", "sword_s",
-	"shield_x", "shield_y", "shield_z", "shield_s"]
-
-const ClipHelper = preload("res://animations/anim_clip.gd")
-# Custom keyframe clips from animation_editor (optional).
-# res://animations/attack_map.json maps "skin|kind" -> clip json path.
-# No entry = fully procedural, so damage/knockback/cooldowns/inputs are untouched.
-const ATTACK_MAP_PATH := "res://animations/attack_map.json"
-const CUSTOM_PARTS := ["model", "arm_l", "arm_r", "sword", "shield", "hat",
-	"skin", "gun", "rifle"]
-static var _attack_map := {}
-static var _attack_map_mtime := 0
-static var _clip_cache := {}
 
 
-static func _reload_attack_map() -> void:
-	if not FileAccess.file_exists(ATTACK_MAP_PATH):
-		_attack_map = {}
-		return
-	var mt := FileAccess.get_modified_time(ATTACK_MAP_PATH)
-	if mt == _attack_map_mtime and not _attack_map.is_empty():
-		return
-	_attack_map_mtime = mt
-	var f := FileAccess.open(ATTACK_MAP_PATH, FileAccess.READ)
-	if f == null:
-		return
-	var parsed = JSON.parse_string(f.get_as_text())
-	f.close()
-	if parsed is Dictionary:
-		_attack_map = parsed
-	else:
-		_attack_map = {}
-
-
-static func custom_clip_for(p_skin: String, p_kind: String) -> Dictionary:
-	_reload_attack_map()
-	var key := p_skin + "|" + p_kind
-	if not _attack_map.has(key):
-		return {}
-	var path := str(_attack_map[key])
-	if _clip_cache.has(path):
-		return _clip_cache[path]
-	if not FileAccess.file_exists(path):
-		return {}
-	var cf := FileAccess.open(path, FileAccess.READ)
-	if cf == null:
-		return {}
-	var parsed = JSON.parse_string(cf.get_as_text())
-	cf.close()
-	if parsed is Dictionary and (parsed as Dictionary).has("tracks"):
-		var clean: Dictionary = ClipHelper._sanitize(parsed)
-		_clip_cache[path] = clean
-		return clean
-	return {}
-
-
-static func anim_key(p_skin: String, p_kind: String, p_phase: int) -> String:
-	return p_skin + "|" + p_kind + "|" + str(p_phase)
-
-
-static func get_anim_ov(p_skin: String, p_kind: String, p_phase: int) -> Dictionary:
-	var k := anim_key(p_skin, p_kind, p_phase)
-	if ANIM_OV.has(k):
-		return ANIM_OV[k]
-	return {}
-
-
-static func set_anim_ov(p_skin: String, p_kind: String, p_phase: int, field: String, val: float) -> void:
-	var k := anim_key(p_skin, p_kind, p_phase)
-	if not ANIM_OV.has(k):
-		ANIM_OV[k] = {}
-	(ANIM_OV[k] as Dictionary)[field] = val
-
-
-static func clear_anim_ov(p_skin: String, p_kind: String, p_phase: int) -> void:
-	ANIM_OV.erase(anim_key(p_skin, p_kind, p_phase))
-
-
-static func save_anim_ovs() -> void:
-	var f := FileAccess.open(ANIM_SAVE_PATH, FileAccess.WRITE)
-	if f != null:
-		f.store_string(JSON.stringify(ANIM_OV))
-		f.close()
-
-
-static func load_anim_ovs() -> void:
-	if not FileAccess.file_exists(ANIM_SAVE_PATH):
-		return
-	var f := FileAccess.open(ANIM_SAVE_PATH, FileAccess.READ)
-	if f == null:
-		return
-	var parsed = JSON.parse_string(f.get_as_text())
-	f.close()
-	if parsed is Dictionary:
-		ANIM_OV = parsed
-
-
-func _custom_node(pname: String) -> Node3D:
-	match pname:
-		"model":
-			return model
-		"arm_l":
-			return arm_l
-		"arm_r":
-			return arm_r
-		"hat":
-			return hat_root
-		"sword":
-			return sword_node
-		"shield":
-			return shield_node
-		"skin":
-			return skin_inst
-		"gun":
-			return gun_node
-		"rifle":
-			return rifle_node
-	return null
-
-
-func _maybe_start_custom() -> void:
-	custom_clip = {}
-	custom_t = 0.0
-	_clip_cache.clear()
-	if atk == null:
-		return
-	custom_clip = custom_clip_for(skin_name, String(atk.get("kind", "")))
-
-
-func _apply_custom_clip() -> void:
-	if custom_clip.is_empty() or st != "atk" or atk == null:
-		return
-	# Unkeyed parts fall back to the CURRENT procedural pose, so only the
-	# keyed parts of the custom clip override the procedural animation.
-	var fb := {}
-	for p in CUSTOM_PARTS:
-		var n := _custom_node(p)
-		if n != null:
-			fb[p] = {"pos": n.position,
-				"rot": Vector3(rad_to_deg(n.rotation.x), rad_to_deg(n.rotation.y), rad_to_deg(n.rotation.z)),
-				"scl": n.scale}
-	var spd := float(custom_clip.get("playback_speed", 1.0))
-	var pose := ClipHelper.sample_pose(custom_clip, custom_t * spd, fb)
-	for p in pose.keys():
-		var n2 := _custom_node(str(p))
-		if n2 == null:
-			continue
-		var d: Dictionary = pose[p]
-		n2.position = d["pos"]
-		var r: Vector3 = d["rot"]
-		n2.rotation = Vector3(deg_to_rad(r.x), deg_to_rad(r.y), deg_to_rad(r.z))
-		n2.scale = d["scl"]
 var fan_left := 0
 var fan_t := 0.0
 var fan_kick := 0.0
@@ -231,6 +128,23 @@ var skin_base_y := 0.0
 var gun_node: Node3D = null
 var rifle_node: Node3D = null
 var horse_root: Node3D = null
+var katana_node: Node3D = null
+var kunai_node: Node3D = null
+var kunai_node_r: Node3D = null
+var kunai_hand := true # toggled at throw start (HTML nextHand^=1); first throw = left, like the reference
+var bomb_node: Node3D = null # held smoke bomb prop (procedural sphere)
+var nj_move := 0.0 # HTML moveAmt: walk-cycle blend for the hands
+var nj_dash := 0.0 # HTML dashAmt: dash-pose blend for the hands
+var nj_twist := 0.0 # HTML body twist driven by the hand driver
+var nj_lean := 0.0 # HTML body lean driven by the hand driver
+var nj_stretch := false # dash body stretch (HTML player.scale 0.8,0.8,1.5)
+var combo_stage := 0 # M1 katana string stage (0 = idle, 1/2/3 = last hit)
+var combo_expire := -9.0 # end of the 0.4 s continuation window
+var _nj_arms := false # hand driver wrote the arms this frame; skip generic
+var stuck: Array = [] # live sticky kunai bombs {fuse, t, node}
+var armed_snap: Array = [] # [mat, albedo, emission] saved while fuse-blinking
+var ghost_t := 0.0
+var slash_fx_done := false
 
 var v := Vector3.ZERO
 var vy := 0.0
@@ -253,10 +167,19 @@ var buf := {"L": -9.0, "H": -9.0, "D": -9.0, "S1": -9.0, "S2": -9.0, "S3": -9.0}
 var cd := {"S1": 0.0, "S2": 0.0, "S3": 0.0}
 var cd_max := {"S1": 4.0, "S2": 6.0, "S3": 8.0}
 var spin_a := 0.0
-var custom_clip: Dictionary = {}
-var custom_t := 0.0
 var _dd := Vector3.ZERO
 var _tr := 0.0
+var dash_hit_done := false
+# Half-extent of the square the fighter is clamped to. Arena default 4.7;
+# open-world mode raises it (fighter physics otherwise assume flat ground).
+var bounds := 4.7
+# --- AI input hooks (bb_ai.gd drives these; same rules as human input) ---
+# When ai_enabled, movement comes from ai_ix/ai_iy (analog -1..1) instead of
+# the keyboard, and attacks are queued via ai_press() into the same buf
+# buffer that _input() uses, so cooldowns/recovery/whiffs apply identically.
+var ai_enabled := false
+var ai_ix := 0.0
+var ai_iy := 0.0
 
 var model: Node3D
 var head_mi: MeshInstance3D
@@ -288,6 +211,10 @@ func setup(_p_col: Color, _p_hat: int, _p_visor: bool) -> void:
 func setup_skin(p_skin: String) -> void:
 	skin_name = p_skin
 	body_col = _skin_color(p_skin)
+	if _is_ninja():
+		cd_max = {"S1": NINJA_FINISH_CD, "S2": NINJA_KUNAI_CD, "S3": NINJA_SMOKE_CD}
+	else:
+		cd_max = {"S1": 4.0, "S2": 6.0, "S3": 8.0}
 	rebuild()
 
 
@@ -297,6 +224,8 @@ func _skin_color(sname: String) -> Color:
 			return Color(0.86, 0.22, 0.16)
 		"cubeknight":
 			return Color(0.55, 0.62, 0.72)
+		"ninja":
+			return Color(0.2, 0.2, 0.28)
 		_:
 			return Color(0.23, 0.51, 0.96)
 
@@ -307,6 +236,10 @@ func _is_cowboy() -> bool:
 
 func _is_knight() -> bool:
 	return skin_name == "cubeknight"
+
+
+func _is_ninja() -> bool:
+	return skin_name == "ninja"
 
 
 func top_y() -> float:
@@ -320,6 +253,21 @@ func counter_open() -> bool:
 func reset_match(pos: Vector3, p_ang: float) -> void:
 	position = pos
 	v = Vector3.ZERO
+	ai_ix = 0.0
+	ai_iy = 0.0
+	for key in buf:
+		buf[key] = -9.0
+	clear_stuck()
+	kunai_hand = true
+	ghost_t = 0.0
+	slash_fx_done = false
+	nj_move = 0.0
+	nj_dash = 0.0
+	nj_twist = 0.0
+	nj_lean = 0.0
+	nj_stretch = false
+	combo_stage = 0
+	combo_expire = -9.0
 	vy = 0.0
 	ang = p_ang
 	face = Vector3(sin(ang), 0, cos(ang))
@@ -328,8 +276,7 @@ func reset_match(pos: Vector3, p_ang: float) -> void:
 	st = "free"
 	t = 0.0
 	atk = null
-	custom_clip = {}
-	custom_t = 0.0
+	dash_hit_done = false
 	dash_cd = 0.0
 	inv = 0.0
 	flash = 0.0
@@ -390,12 +337,20 @@ func rebuild() -> void:
 	horse_root = null
 	sword_node = null
 	shield_node = null
+	katana_node = null
+	kunai_node = null
+	kunai_node_r = null
+	bomb_node = null
+	stuck.clear()
+	armed_snap.clear()
 	if _build_skin():
 		head_mi = null
 		if _is_cowboy():
 			_build_cowboy_gear()
 		elif _is_knight():
 			_build_knight_gear()
+		elif _is_ninja():
+			_build_ninja_gear()
 		return
 	# fallback: simple floating block (skin file missing)
 	var dk := _mat(Color(body_col.r * 0.6, body_col.g * 0.6, body_col.b * 0.6))
@@ -548,6 +503,420 @@ func _build_knight_gear() -> void:
 		arm_l.add_child(shield_node)
 
 
+static func _octa_mesh(r: float) -> ArrayMesh:
+	# Small octahedron for the katana handle decorations (HTML OctahedronGeometry).
+	var v := [Vector3(0, r, 0), Vector3(0, -r, 0), Vector3(r, 0, 0),
+		Vector3(-r, 0, 0), Vector3(0, 0, r), Vector3(0, 0, -r)]
+	var tris := [[0, 4, 2], [0, 2, 5], [0, 5, 3], [0, 3, 4],
+		[1, 2, 4], [1, 5, 2], [1, 3, 5], [1, 4, 3]]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for tr in tris:
+		for vi in tr:
+			st.add_vertex(v[int(vi)])
+	st.generate_normals()
+	return st.commit()
+
+
+static func _pmat(col: Color, metal: float, rough: float, emis: Color = Color(0, 0, 0), energy: float = 0.0) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = col
+	m.metallic = metal
+	m.roughness = rough
+	if energy > 0.0:
+		m.emission_enabled = true
+		m.emission = emis
+		m.emission_energy_multiplier = energy
+	return m
+
+
+# Procedural katana from HTML makeSword(): curved dark blade (parabola
+# c(x) = 0.16*(x/L)^2, L = 1.4) with a narrow green strip, layered
+# dark/green guard discs, dark handle with 24 green octahedra, dark+green
+# pommel. Blade runs along +Z from the guard; the pivot IS this node.
+static func make_katana_node() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Katana"
+	var dark := _pmat(Color(0.19, 0.20, 0.23), 0.5, 0.45)
+	var green := _pmat(Color(0.56, 0.88, 0.23), 0.0, 0.4, Color(0.29, 0.63, 0.06), 0.8)
+	var hdark := _pmat(Color(0.10, 0.11, 0.13), 0.0, 0.6)
+	var blade := Node3D.new()
+	blade.name = "Blade"
+	root.add_child(blade)
+	var detail := Node3D.new()
+	detail.name = "GreenBladeDetail"
+	root.add_child(detail)
+	var L := 1.4
+	var segs := 4
+	for si in segs:
+		var x0 := L * float(si) / float(segs)
+		var x1 := L * float(si + 1) / float(segs)
+		var xm := (x0 + x1) * 0.5
+		var slope := 0.32 * xm / (L * L)
+		var seg := MeshInstance3D.new()
+		var bm := BoxMesh.new()
+		bm.size = Vector3(0.095 * (1.0 - 0.35 * xm / L), 0.03, (x1 - x0) * 1.02)
+		seg.mesh = bm
+		seg.material_override = dark
+		seg.position = Vector3(0, 0.16 * xm * xm / (L * L), 0.21 + xm)
+		seg.rotation.x = -atan(slope)
+		blade.add_child(seg)
+		var strip := MeshInstance3D.new()
+		var sm := BoxMesh.new()
+		sm.size = Vector3(0.03, 0.036, (x1 - x0) * 1.02)
+		strip.mesh = sm
+		strip.material_override = green
+		strip.position = Vector3(0.035, 0.16 * xm * xm / (L * L) + 0.012, 0.21 + xm)
+		strip.rotation.x = -atan(slope)
+		detail.add_child(strip)
+	var guard := Node3D.new()
+	guard.name = "Guard"
+	root.add_child(guard)
+	var gr := [0.125, 0.09, 0.07]
+	var gh := [0.035, 0.04, 0.046]
+	for gi in 3:
+		var disc := MeshInstance3D.new()
+		var cm := CylinderMesh.new()
+		cm.top_radius = gr[gi]
+		cm.bottom_radius = gr[gi]
+		cm.height = gh[gi]
+		cm.radial_segments = 16
+		disc.mesh = cm
+		disc.material_override = hdark if gi != 1 else green
+		disc.rotation.x = PI * 0.5
+		disc.position = Vector3(0, 0, 0.19)
+		guard.add_child(disc)
+	var handle := Node3D.new()
+	handle.name = "Handle"
+	root.add_child(handle)
+	var grip := MeshInstance3D.new()
+	var gm := CylinderMesh.new()
+	gm.top_radius = 0.042
+	gm.bottom_radius = 0.042
+	gm.height = 0.34
+	gm.radial_segments = 10
+	grip.mesh = gm
+	grip.material_override = hdark
+	grip.rotation.x = PI * 0.5
+	handle.add_child(grip)
+	var deco := Node3D.new()
+	deco.name = "HandleDecorations"
+	root.add_child(deco)
+	var om := _octa_mesh(0.032)
+	var sides := [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 1, 0), Vector3(0, -1, 0)]
+	for fi in 4:
+		for oi in 6:
+			var d := MeshInstance3D.new()
+			d.mesh = om
+			d.material_override = green
+			var f: Vector3 = sides[fi]
+			d.position = Vector3(f.x * 0.044, f.y * 0.044, -0.14 + float(oi) * 0.056 + float(fi % 2) * 0.028)
+			deco.add_child(d)
+	var pommel := Node3D.new()
+	pommel.name = "Pommel"
+	root.add_child(pommel)
+	var pd := MeshInstance3D.new()
+	var pm := CylinderMesh.new()
+	pm.top_radius = 0.056
+	pm.bottom_radius = 0.056
+	pm.height = 0.05
+	pm.radial_segments = 10
+	pd.mesh = pm
+	pd.material_override = hdark
+	pd.rotation.x = PI * 0.5
+	pd.position = Vector3(0, 0, -0.2)
+	pommel.add_child(pd)
+	var pg := MeshInstance3D.new()
+	var qm := CylinderMesh.new()
+	qm.top_radius = 0.036
+	qm.bottom_radius = 0.036
+	qm.height = 0.056
+	qm.radial_segments = 10
+	pg.mesh = qm
+	pg.material_override = green
+	pg.rotation.x = PI * 0.5
+	pg.position = Vector3(0, 0, -0.2)
+	pommel.add_child(pg)
+	return root
+
+
+# Procedural kunai: faithful 1:1 port of html/ninjasetup.html makeKunai().
+# HTML source (lines 306-336):
+#   kBladeGeo  = ConeGeometry(0.1, 0.45, 4, 1) -> rotateX(PI/2),
+#                scale(1, 0.25, 1), translate(0, 0, -0.225)
+#   kGuardGeo  = BoxGeometry(0.17, 0.05, 0.05) -> translate(0, 0, -0.46)
+#   kHandleGeo = CylinderGeometry(0.035, 0.035, 0.28, 8) -> rotateX(PI/2),
+#                translate(0, 0, -0.62)
+#   kRingGeo   = TorusGeometry(0.075, 0.02, 6, 14) -> rotateX(PI/2),
+#                translate(0, 0, -0.83)
+#   kBladeMat  = Standard(color 0xd5deee, metalness 0.85, roughness 0.28,
+#                emissive 0x2a3a58, intensity 0.6)
+#   kDarkMat   = Standard(color 0x1b1e2c, roughness 0.7)
+# Origin at the TIP, tip faces +Z (blade body extends toward -Z).
+# Total length ~0.93 (tip 0 -> ring outer -0.925). Spacing/gaps match the
+# source: guard spans -0.435..-0.485, grip spans -0.48..-0.76,
+# ring centered -0.83.
+# One design feeds held props (NINJA_KUNAI_HELD_SCALE) and flying
+# projectiles (NINJA_KUNAI_THROWN_SCALE, spun around local Z in flight).
+static func make_kunai_node() -> Node3D:
+	var root := Node3D.new()
+	root.name = "Kunai"
+	var blade_mat := _pmat(Color(0.84, 0.87, 0.93), 0.85, 0.28, Color(0.16, 0.23, 0.35), 0.6)
+	var dark_mat := _pmat(Color(0.11, 0.12, 0.17), 0.0, 0.7)
+	# Blade: 4-sided cone (diamond cross-section), tip (radius 0) at +Y,
+	# base (radius 0.1) at -Y. rotateX(PI/2) lays the axis along Z with the
+	# tip toward +Z; node scale (1, 1, 0.25) flattens the local Z, which the
+	# X-rotation turns into world -Y, reproducing the HTML scale(1,0.25,1)
+	# vertical flatten. Positioned so the tip sits exactly at the origin.
+	var blade := MeshInstance3D.new()
+	blade.name = "Blade"
+	var cm := CylinderMesh.new()
+	cm.top_radius = 0.0
+	cm.bottom_radius = 0.1
+	cm.height = 0.45
+	cm.radial_segments = 4
+	blade.mesh = cm
+	blade.material_override = blade_mat
+	blade.rotation.x = PI * 0.5
+	blade.scale = Vector3(1, 1, 0.25)
+	blade.position = Vector3(0, 0, -0.225)
+	blade.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	root.add_child(blade)
+	# Guard: wide thin box across X, exactly as the source.
+	var guard := MeshInstance3D.new()
+	guard.name = "Guard"
+	var gb := BoxMesh.new()
+	gb.size = Vector3(0.17, 0.05, 0.05)
+	guard.mesh = gb
+	guard.material_override = dark_mat
+	guard.position = Vector3(0, 0, -0.46)
+	guard.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	root.add_child(guard)
+	# Handle: grip cylinder along Z, 8 radial segments like the source.
+	var grip := MeshInstance3D.new()
+	grip.name = "Handle"
+	var gm := CylinderMesh.new()
+	gm.top_radius = 0.035
+	gm.bottom_radius = 0.035
+	gm.height = 0.28
+	gm.radial_segments = 8
+	grip.mesh = gm
+	grip.material_override = dark_mat
+	grip.rotation.x = PI * 0.5
+	grip.position = Vector3(0, 0, -0.62)
+	grip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	root.add_child(grip)
+	# Ring: torus radius 0.075, tube 0.02 (outer 0.095, inner 0.055),
+	# 6 x 14 segments like TorusGeometry(0.075, 0.02, 6, 14).
+	# Godot TorusMesh already lies flat in XZ (hole along Y), which is
+	# exactly the HTML TorusGeometry after its rotateX(PI/2), so no extra
+	# rotation is applied here.
+	var ring := MeshInstance3D.new()
+	ring.name = "Ring"
+	var tm := TorusMesh.new()
+	tm.inner_radius = 0.055
+	tm.outer_radius = 0.095
+	tm.rings = 14
+	tm.ring_segments = 6
+	ring.mesh = tm
+	ring.material_override = blade_mat
+	ring.position = Vector3(0, 0, -0.83)
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	root.add_child(ring)
+	return root
+
+
+func _build_ninja_gear() -> void:
+	# Procedural katana in the right fist (visible only while slashing);
+	# one held procedural kunai per fist, throws alternate like the source.
+	katana_node = make_katana_node()
+	katana_node.position = Vector3(0, 0.25, 0.1)
+	katana_node.scale = Vector3.ONE * 0.7
+	katana_node.visible = false
+	var tip := Node3D.new()
+	tip.name = "Tip"
+	tip.position = Vector3(0, 0.16, 1.61)
+	katana_node.add_child(tip)
+	arm_r.add_child(katana_node)
+	for side in 2:
+		var kn := make_kunai_node()
+		kn.position = KUNAI_REST
+		kn.scale = Vector3.ONE * NINJA_KUNAI_HELD_SCALE
+		var tip2 := Node3D.new()
+		tip2.name = "Tip"
+		tip2.position = Vector3(0, 0, 0.3)
+		kn.add_child(tip2)
+		kn.visible = false
+		if side == 0:
+			kunai_node = kn
+			arm_l.add_child(kn)
+		else:
+			kunai_node_r = kn
+			arm_r.add_child(kn)
+	# Held smoke bomb: dark procedural sphere shown in the right fist
+	# during the throw wind-up (HTML heldB at (0, 0.22, 0.02)).
+	if bomb_node == null:
+		bomb_node = MeshInstance3D.new()
+		var sm := SphereMesh.new()
+		sm.radius = 0.17
+		sm.height = 0.34
+		(bomb_node as MeshInstance3D).mesh = sm
+		(bomb_node as MeshInstance3D).material_override = _pmat(Color(0.10, 0.06, 0.19), 0.0, 0.5, Color(0.33, 0.33, 0.38), 0.6)
+		bomb_node.position = Vector3(0, 0.22, 0.02)
+		bomb_node.visible = false
+		arm_r.add_child(bomb_node)
+
+
+func _nj_eo(x: float) -> float:
+	return 1.0 - pow(1.0 - x, 3.0)
+
+
+func _nj_ei(x: float) -> float:
+	return x * x
+
+
+func _nj_eio(x: float) -> float:
+	if x < 0.5:
+		return 2.0 * x * x
+	return 1.0 - pow(-2.0 * x + 2.0, 2.0) / 2.0
+
+
+# HTML hand animation port (basePose / actPose / updateHands /
+# slashPose from ninjasetup.html). HTML hands[0] (sx=+1) maps to arm_r,
+# hands[1] (sx=-1) maps to arm_l. Positions convert from the HTML
+# ground-origin group space to the model by +0.55 y (head-center offset).
+func _nj_drive_hands(dt: float, tnow: float, moving: bool) -> void:
+	_nj_arms = true
+	nj_move += ((1.0 if moving else 0.0) - nj_move) * minf(1.0, dt * 12.0)
+	nj_dash += ((1.0 if st == "dash" else 0.0) - nj_dash) * minf(1.0, dt * 20.0)
+	nj_stretch = st == "dash"
+	var tp := [Vector3.ZERO, Vector3.ZERO]
+	var tr := [0.0, 0.0]
+	var ts := [1.0, 1.0]
+	for hi in 2:
+		var sx := 1.0 if hi == 0 else -1.0
+		var swing := sin(tnow * 12.0 + float(hi) * PI)
+		var p := Vector3(sx * 0.66, -0.08 + sin(tnow * 2.4 + float(hi) * 1.7) * 0.035, 0.08)
+		p.x = lerpf(p.x, sx * 0.7, nj_move)
+		p.y = lerpf(p.y, -0.08 + maxf(0.0, swing) * 0.14, nj_move)
+		p.z = lerpf(p.z, 0.08 + swing * 0.34, nj_move)
+		p.x = lerpf(p.x, sx * 0.6, nj_dash)
+		p.y = lerpf(p.y, 0.05, nj_dash)
+		p.z = lerpf(p.z, -0.85, nj_dash)
+		tp[hi] = p
+		tr[hi] = sin(tnow * 12.0 + float(hi) * PI) * nj_move * 0.6 - nj_dash * 0.9
+		ts[hi] = 1.0 + nj_dash * 0.8
+	var akind := ""
+	if st == "atk" and atk != null:
+		akind = String(atk["kind"])
+	var uu := 0.0
+	var ssg := 1.0
+	if akind == "kunai" or akind == "smoke" or akind == "slash1" or akind == "slash2" or akind == "slash3":
+		var pose: Dictionary = NJ_POSE_KUNAI if akind == "kunai" else (NJ_POSE_SMOKE if akind == "smoke" else NJ_POSE_SLASH)
+		var wind: float = float(pose["wind"])
+		var rel: float = float(pose["rel"])
+		var TT: float = float(pose["T"])
+		var hand := 0 if (kunai_hand or akind != "kunai") else 1
+		ssg = 1.0 if hand == 0 else -1.0
+		var A: Array = pose["A"]
+		var B: Array = pose["B"]
+		var off: Array = pose["off"]
+		for hj in 2:
+			if akind != "kunai" and akind != "smoke" and akind != "slash1":
+				break
+			var mine := hj == hand
+			var hsx := 1.0 if hj == 0 else -1.0
+			var bs: Vector3 = tp[hj]
+			var ax := Vector3(float(A[0]) * hsx, float(A[1]), float(A[2]))
+			var bx := Vector3(float(B[0]) * hsx, float(B[1]), float(B[2]))
+			var q: Vector3 = tp[hj]
+			var rq: float = tr[hj]
+			if akind != "slash1":
+				if t < wind:
+					var k1 := _nj_eo(t / wind)
+					q = bs.lerp(ax, k1)
+					if mine:
+						rq = -0.7 * (t / wind)
+				elif t < rel:
+					var k2 := _nj_ei((t - wind) / maxf(rel - wind, 0.001))
+					q = ax.lerp(bx, k2)
+					if mine:
+						ts[hj] = 1.6
+						rq = 0.5
+				else:
+					var k3 := _nj_eio(minf(1.0, (t - rel) / maxf(TT - rel, 0.001)))
+					q = bx.lerp(bs, k3)
+			tp[hj] = q
+			tr[hj] = rq
+		if akind == "slash1":
+			# HTML slashPose: both hands ride the sword circle; twist/lean
+			# still use the slash POSE clock (rel 0.14, T 0.55).
+			var phi := 0.9
+			if t < 0.1:
+				phi = lerpf(0.9, 2.2, _nj_eo(t / 0.1))
+			else:
+				phi = lerpf(2.2, -1.8, _nj_eio(minf(1.0, (t - 0.1) / 0.22)))
+			tp[0] = Vector3(sin(phi) * 0.8, 0.05, cos(phi) * 0.8)
+			tp[1] = Vector3(sin(phi) * 0.58, 0.0, cos(phi) * 0.58)
+			tr[0] = 0.0
+			tr[1] = 0.0
+			ts[0] = 1.0
+			ts[1] = 1.0
+		if t < rel:
+			uu = -minf(1.0, t / maxf(wind, 0.001))
+		else:
+			uu = 1.0 - _nj_eio(minf(1.0, (t - rel) / maxf(TT - rel, 0.001)))
+		if akind == "slash2" or akind == "slash3":
+			# Extension (no source data beyond the single slashPose): both
+			# hands ride the stage's sword motion with the same
+			# circle relationship as hit 1 (backhand), or the overhead
+			# grip sliding down into the slam (finisher).
+			if akind == "slash2":
+				var phi2 := -1.8
+				if t < 0.06:
+					phi2 = lerpf(-1.8, -2.4, _nj_eo(t / 0.06))
+				else:
+					phi2 = lerpf(-2.4, 1.8, _nj_eio(minf(1.0, (t - 0.06) / 0.24)))
+				tp[0] = Vector3(sin(phi2) * 0.8, 0.15, cos(phi2) * 0.8)
+				tp[1] = Vector3(sin(phi2) * 0.58, 0.1, cos(phi2) * 0.58)
+				tr[0] = 0.0
+				tr[1] = 0.0
+				ts[0] = 1.0
+				ts[1] = 1.0
+				uu = 1.0 - _nj_eio(minf(1.0, maxf(0.0, t - 0.06) / 0.44))
+			else:
+				var grip := Vector3(0.15, 1.0, 0.25)
+				var chop := Vector3(0.15, 0.05, 0.75)
+				var q0: Vector3 = tp[0]
+				var q1: Vector3 = tp[1]
+				if t < 0.22:
+					var e := _nj_eo(t / 0.22)
+					q0 = (tp[0] as Vector3).lerp(grip, e)
+					q1 = (tp[1] as Vector3).lerp(Vector3(-grip.x, grip.y - 0.08, grip.z), e)
+				elif t < 0.38:
+					var e2 := _nj_eio((t - 0.22) / 0.16)
+					q0 = grip.lerp(chop, e2)
+					q1 = Vector3(-grip.x, grip.y - 0.08, grip.z).lerp(Vector3(-chop.x, chop.y, chop.z), e2)
+				else:
+					var e3 := _nj_eio(minf(1.0, (t - 0.38) / 0.4))
+					q0 = chop.lerp(tp[0] as Vector3, e3)
+					q1 = Vector3(-chop.x, chop.y, chop.z).lerp(tp[1] as Vector3, e3)
+				tp[0] = q0
+				tp[1] = q1
+				uu = 1.0 - _nj_eio(minf(1.0, maxf(0.0, t - 0.22) / 0.56))
+	nj_twist = uu * 0.35 * ssg
+	nj_lean = nj_move * 0.12 - nj_dash * 0.25
+	if akind == "smoke":
+		nj_lean += uu * 0.22
+	var ksm := 1.0 - exp(-dt * (50.0 if (akind == "kunai" or akind == "smoke" or akind == "slash1" or akind == "slash2" or akind == "slash3") else 24.0))
+	for hk in 2:
+		var arm: Node3D = arm_r if hk == 0 else arm_l
+		var want := Vector3((tp[hk] as Vector3).x, 0.55 + (tp[hk] as Vector3).y, (tp[hk] as Vector3).z)
+		arm.position = (arm.position as Vector3).lerp(want, ksm)
+		arm.rotation.x += (float(tr[hk]) - arm.rotation.x) * ksm
+		arm.scale = Vector3(1.0, 1.0, lerpf(arm.scale.z, float(ts[hk]), ksm))
+
+
 func _sword_tip() -> Vector3:
 	if sword_node != null:
 		var tip := sword_node.get_node_or_null("Tip") as Node3D
@@ -631,6 +1000,11 @@ func _eat(n: String) -> void:
 	buf[n] = -9.0
 
 
+func ai_press(n: String) -> void:
+	if game != null and buf.has(n):
+		buf[n] = game.now
+
+
 func _key_down(codes: Array) -> bool:
 	for c in codes:
 		if Input.is_physical_key_pressed(c):
@@ -640,10 +1014,6 @@ func _key_down(codes: Array) -> bool:
 
 func upd(dt: float, play: bool) -> void:
 	t += dt
-	if st != "atk" and not custom_clip.is_empty():
-		custom_clip = {}
-	elif st == "atk" and not custom_clip.is_empty():
-		custom_t += dt
 	dash_cd = maxf(0.0, dash_cd - dt)
 	inv = maxf(0.0, inv - dt)
 	flash = maxf(0.0, flash - dt)
@@ -652,13 +1022,17 @@ func upd(dt: float, play: bool) -> void:
 		cd[key] = maxf(0.0, float(cd[key]) - dt)
 	if st == "ko":
 		return
-	position.x = clampf(position.x, -4.7, 4.7)
-	position.z = clampf(position.z, -4.7, 4.7)
+	position.x = clampf(position.x, -bounds, bounds)
+	position.z = clampf(position.z, -bounds, bounds)
 	var ix := 0.0
 	var iy := 0.0
 	if play:
-		ix = (1.0 if _key_down(keys["right"]) else 0.0) - (1.0 if _key_down(keys["left"]) else 0.0)
-		iy = (1.0 if _key_down(keys["up"]) else 0.0) - (1.0 if _key_down(keys["down"]) else 0.0)
+		if ai_enabled:
+			ix = clampf(ai_ix, -1.0, 1.0)
+			iy = clampf(ai_iy, -1.0, 1.0)
+		else:
+			ix = (1.0 if _key_down(keys["right"]) else 0.0) - (1.0 if _key_down(keys["left"]) else 0.0)
+			iy = (1.0 if _key_down(keys["up"]) else 0.0) - (1.0 if _key_down(keys["down"]) else 0.0)
 	var wx := ix - iy
 	var wz := -ix - iy
 	var wl := Vector2(wx, wz).length()
@@ -678,11 +1052,18 @@ func upd(dt: float, play: bool) -> void:
 				_eat("H")
 				start_atk("H")
 			elif _has("L"):
-				_eat("L")
-				start_atk("L")
+				# Ninja J (L-slot) is the katana light string, not a punch.
+				if _is_ninja():
+					_ninja_s1()
+				else:
+					_eat("L")
+					start_atk("L")
 			elif _has("S1") and float(cd["S1"]) <= 0.0:
-				_eat("S1")
-				start_atk("S1")
+				if _is_ninja():
+					_ninja_s1()
+				else:
+					_eat("S1")
+					start_atk("S1")
 			elif _has("S2") and float(cd["S2"]) <= 0.0:
 				_eat("S2")
 				start_atk("S2")
@@ -690,9 +1071,10 @@ func upd(dt: float, play: bool) -> void:
 				_eat("S3")
 				start_atk("S3")
 		if st == "free":
+			var top := NINJA_SPEED if _is_ninja() else 6.4
 			var e := 1.0 - exp(-(16.0 if wl > 0.01 else 11.0) * dt)
-			v.x += (wx * 6.4 - v.x) * e
-			v.z += (wz * 6.4 - v.z) * e
+			v.x += (wx * top - v.x) * e
+			v.z += (wz * top - v.z) * e
 			if wl > 0.01:
 				ta = atan2(wx, wz)
 			elif foe != null and String(foe.st) != "ko":
@@ -710,6 +1092,40 @@ func upd(dt: float, play: bool) -> void:
 				v.z = ddz / dl * 14.0
 				ang = atan2(ddx, ddz)
 				face = Vector3(sin(ang), 0, cos(ang))
+		# M1 katana string. Hit 1: horizontal sweep, lunge 3.0 over
+		# 0.08-0.30 s, trail + hit at 0.10 (window 0.10-0.34).
+		if atk != null and String(atk["kind"]) == "slash1":
+			spin_a = 0.0
+			if t >= 0.08 and t <= 0.30:
+				v.x = face.x * 3.0
+				v.z = face.z * 3.0
+			if not slash_fx_done and t >= 0.10:
+				slash_fx_done = true
+				game.vfx.slash_ninja(position, ang, Color(0.71, 1.0, 0.29))
+				_slash_hit_foe(1)
+		# Hit 2: rising backhand, lunge 3.5 over 0.06-0.28 s, reverse
+		# trail + hit at 0.06 (window 0.06-0.30).
+		if atk != null and String(atk["kind"]) == "slash2":
+			spin_a = 0.0
+			if t >= 0.06 and t <= 0.28:
+				v.x = face.x * 3.5
+				v.z = face.z * 3.5
+			if not slash_fx_done and t >= 0.06:
+				slash_fx_done = true
+				game.vfx.slash_ninja(position, ang + 0.5, Color(0.71, 1.0, 0.29))
+				_slash_hit_foe(2)
+		# Hit 3: overhead slam, lunge 6.0 over 0.28-0.40 s, separate
+		# finisher check at release 0.38 (radial, with shockwave).
+		if atk != null and String(atk["kind"]) == "slash3":
+			spin_a = 0.0
+			if t >= 0.28 and t <= 0.40:
+				v.x = face.x * 6.0
+				v.z = face.z * 6.0
+			if not slash_fx_done and t >= 0.38:
+				slash_fx_done = true
+				cd["S1"] = NINJA_FINISH_CD
+				cd_max["S1"] = NINJA_FINISH_CD
+				_slash_hit_foe(3)
 		if atk != null and String(atk["kind"]) == "fan":
 			spin_a = 0.0
 			fan_t -= dt
@@ -724,6 +1140,16 @@ func upd(dt: float, play: bool) -> void:
 			if not hit_done and t >= float(atk["w"]):
 				hit_done = true
 				_fire_gun(true)
+		elif atk != null and String(atk["kind"]) == "kunai":
+			spin_a = 0.0
+			if not hit_done and t >= float(atk["w"]):
+				hit_done = true
+				_fire_kunai()
+		elif atk != null and String(atk["kind"]) == "smoke":
+			spin_a = 0.0
+			if not hit_done and t >= float(atk["w"]):
+				hit_done = true
+				_deploy_smoke()
 		elif atk != null and String(atk["kind"]) == "bash":
 			spin_a = 0.0
 			var bw: float = float(atk["w"])
@@ -754,6 +1180,8 @@ func upd(dt: float, play: bool) -> void:
 				_sweep_check()
 		elif atk != null and String(atk["kind"]) == "counter":
 			spin_a = 0.0
+		elif atk != null and String(atk["kind"]) in ["slash1", "slash2", "slash3"]:
+			spin_a = 0.0
 		else:
 			if atk != null and String(atk["kind"]) == "spin":
 				spin_a += dt * 18.0
@@ -766,21 +1194,52 @@ func upd(dt: float, play: bool) -> void:
 			_eat("D")
 			start_dash(Vector3(wx, 0, wz) if wl > 0.01 else face)
 		elif t >= float(atk["w"]) + float(atk["a"]) + float(atk["r"]):
-			st = "free"
-			atk = null
+			var kkind := String(atk["kind"])
+			# M1 buffering: a buffered S1 chains straight into the next
+			# hit; otherwise hits 1-2 leave a 0.4 s continuation window.
+			if (kkind == "slash1" or kkind == "slash2") and play and (_has("S1") or _has("L")):
+				_eat("S1")
+				_eat("L")
+				combo_stage = 2 if kkind == "slash1" else 3
+				_start_slash(NINJA_SLASH2 if kkind == "slash1" else NINJA_SLASH3)
+			else:
+				if kkind == "slash1" or kkind == "slash2":
+					combo_stage = 1 if kkind == "slash1" else 2
+					combo_expire = game.now + NINJA_COMBO_WINDOW
+				elif kkind == "slash3":
+					combo_stage = 0
+				st = "free"
+				atk = null
 	elif st == "dash":
-		v = _dd * 18.0
+		# HTML shadow dash: DASH_SPEED 22, DASH_TIME 0.2, ghost every 0.025 s
+		# (life 0.35 dark 0x1a0a2e) + purple smoke 0x2a1250, 8 at start,
+		# ~0.8/frame during, 6 at end, stretched pose (0.8,0.8,1.5).
+		v = _dd * (NINJA_DASH_SPEED if _is_ninja() else 18.0)
 		_tr -= dt
-		if _tr <= 0.0:
+		if _is_ninja():
+			ghost_t -= dt
+			if ghost_t <= 0.0:
+				ghost_t = 0.025
+				game.vfx.ghost(position + Vector3(0, 0.6, 0), ang, Vector3(0.8, 0.8, 1.5))
+			if randf() < 0.8:
+				game.vfx.puff(position + Vector3(randf_range(-0.3, 0.3), randf_range(-0.4, 0.4), randf_range(-0.3, 0.3)),
+					Color(0.16, 0.07, 0.31), randf_range(0.18, 0.4), 0.5, randf_range(1.0, 2.5))
+			_dash_hit_check()
+		elif _tr <= 0.0:
 			_tr = 0.04
 			game.vfx.streak(position, atan2(_dd.x, _dd.z), body_col)
 			game.vfx.emit(position + Vector3(0, 0.1, 0),
 				Vector3(randf_range(-1, 1), 1.0, randf_range(-1, 1)),
 				Color(0.91, 0.89, 0.78), 0.1, 0.3, 6.0)
-		if t > 0.17:
+		var dash_len := NINJA_DASH_TIME if _is_ninja() else 0.17
+		if t > dash_len:
 			st = "free"
 			rec = 0.08
 			v *= 0.3
+			if _is_ninja():
+				for i in 6:
+					game.vfx.puff(position + Vector3(randf_range(-0.3, 0.3), randf_range(-0.4, 0.4), randf_range(-0.3, 0.3)),
+						Color(0.16, 0.07, 0.31), randf_range(0.18, 0.4), 0.5, randf_range(1.0, 2.5))
 	elif st == "ride":
 		ride_tick = maxf(0.0, ride_tick - dt)
 		var rd := face
@@ -807,6 +1266,7 @@ func upd(dt: float, play: bool) -> void:
 				ride_tick = RIDE_TICK
 				foe.hp = maxf(0.0, float(foe.hp) - RIDE_DMG)
 				foe.dmg += RIDE_DMG
+				game.vfx.damage_number(foe.position + Vector3(0, 2.0, 0), str(int(RIDE_DMG)), Color(0.85, 0.75, 1.0), false)
 				var kl := RIDE_KB * 0.55 / float(foe.mass)
 				var hv := Vector3(hx / maxf(hd, 0.01), 0, hz / maxf(hd, 0.01))
 				foe.v = Vector3(hv.x * kl, 0, hv.z * kl)
@@ -845,8 +1305,44 @@ func upd(dt: float, play: bool) -> void:
 		game.ko(self)
 
 
+func _start_slash(stage_atk: Dictionary) -> void:
+	atk = stage_atk.duplicate()
+	st = "atk"
+	t = 0.0
+	hit_done = false
+	slash_fx_done = false
+	combo_expire = -9.0
+	if foe != null and String(foe.st) != "ko":
+		var dx: float = foe.position.x - position.x
+		var dz: float = foe.position.z - position.z
+		if Vector2(dx, dz).length() < 5.0:
+			ang = atan2(dx, dz)
+	face = Vector3(sin(ang), 0, cos(ang))
+	game.audio.play("dash")
+
+
+func _ninja_s1() -> void:
+	# M1 string entry (J/L-slot and S1 both feed it): continue the open
+	# combo window, else restart.
+	_eat("S1")
+	_eat("L")
+	if combo_stage == 1 and game.now <= combo_expire:
+		combo_stage = 2
+		_start_slash(NINJA_SLASH2)
+	elif combo_stage == 2 and game.now <= combo_expire:
+		combo_stage = 3
+		_start_slash(NINJA_SLASH3)
+	else:
+		combo_stage = 1
+		_start_slash(NINJA_SLASH1)
+
+
 func start_atk(kind: String) -> void:
 	if kind == "L":
+		# Ninja J (L-slot) is the katana light string, not a punch.
+		if _is_ninja():
+			_ninja_s1()
+			return
 		atk = ATK_L.duplicate()
 	elif kind == "H":
 		atk = ATK_H.duplicate()
@@ -855,6 +1351,9 @@ func start_atk(kind: String) -> void:
 			atk = ATK_FAN.duplicate()
 		elif _is_knight():
 			atk = ATK_COUNTER.duplicate()
+		elif _is_ninja():
+			atk = NINJA_SLASH1.duplicate()
+			combo_stage = 1
 		else:
 			atk = ATK_S1.duplicate()
 	elif kind == "S2":
@@ -862,6 +1361,8 @@ func start_atk(kind: String) -> void:
 			atk = ATK_RIFLE.duplicate()
 		elif _is_knight():
 			atk = ATK_BASH.duplicate()
+		elif _is_ninja():
+			atk = ATK_KUNAI.duplicate()
 		else:
 			atk = ATK_S2.duplicate()
 	else:
@@ -870,11 +1371,14 @@ func start_atk(kind: String) -> void:
 			return
 		elif _is_knight():
 			atk = ATK_SWEEP.duplicate()
+		elif _is_ninja():
+			atk = ATK_SMOKE.duplicate()
 		else:
 			atk = ATK_S3.duplicate()
 		kind = "S3"
 	if atk.has("cd"):
 		cd[kind] = float(atk["cd"])
+		cd_max[kind] = float(atk["cd"])
 	st = "atk"
 	t = 0.0
 	hit_done = false
@@ -894,13 +1398,24 @@ func start_atk(kind: String) -> void:
 	if String(atk["kind"]) == "bash":
 		bash_fx_done = false
 		bash_streak_t = 0.0
+	if String(atk["kind"]) == "kunai":
+		kunai_hand = not kunai_hand
+	if String(atk["kind"]) in ["slash1", "slash2", "slash3"]:
+		slash_fx_done = false
+	# HTML smoke throw has no burst at press; the flash/ring/puffs happen
+	# at release-detonation (see deploy_cloud burst).
+	if String(atk["kind"]) == "smoke":
+		game.audio.play("dash")
 	if foe != null and String(foe.st) != "ko":
 		var dx: float = foe.position.x - position.x
 		var dz: float = foe.position.z - position.z
-		if Vector2(dx, dz).length() < 5.0:
+		# Shooters snap-aim at longer range so offset fists still threaten.
+		var aim_range := 5.0
+		if atk != null and String(atk.get("kind", "")) in ["kunai", "rifle", "fan"]:
+			aim_range = 8.0
+		if Vector2(dx, dz).length() < aim_range:
 			ang = atan2(dx, dz)
 	face = Vector3(sin(ang), 0, cos(ang))
-	_maybe_start_custom()
 	if kind == "S1":
 		game.audio.play("dash")
 	elif kind == "L":
@@ -912,15 +1427,58 @@ func start_atk(kind: String) -> void:
 func start_dash(d: Vector3) -> void:
 	st = "dash"
 	t = 0.0
+	dash_hit_done = false
 	_dd = Vector3(d.x, 0, d.z)
 	if _dd.length() < 0.01:
 		_dd = face
 	_dd = _dd.normalized()
 	inv = 0.22
-	dash_cd = 0.75
+	# HTML DASH_COOLDOWN 0.7 for ninja; others keep 0.75.
+	dash_cd = NINJA_DASH_CD if _is_ninja() else 0.75
 	_tr = 0.0
+	ghost_t = 0.0
 	game.audio.play("dash")
-	game.vfx.burst(position + Vector3(0, 0.1, 0), Color(0.91, 0.89, 0.78), 6, 2.0, 0.1, 0.35, 0.3)
+	if _is_ninja():
+		for i in 8:
+			game.vfx.puff(position + Vector3(randf_range(-0.3, 0.3), randf_range(-0.4, 0.4), randf_range(-0.3, 0.3)),
+				Color(0.16, 0.07, 0.31), randf_range(0.18, 0.4), 0.5, randf_range(1.0, 2.5))
+	else:
+		game.vfx.burst(position + Vector3(0, 0.1, 0), Color(0.91, 0.89, 0.78), 6, 2.0, 0.1, 0.35, 0.3)
+
+
+func _dash_hit_check() -> void:
+	# Ninja shadow-dash strike: one damage tick if the dash carries us into
+	# the foe. Same rules as other hits (counter punishes, i-frames block).
+	if dash_hit_done or foe == null or String(foe.st) == "ko" or not (foe as Node3D).visible:
+		return
+	var dx: float = foe.position.x - position.x
+	var dz: float = foe.position.z - position.z
+	if Vector2(dx, dz).length() > NINJA_DASH_RANGE:
+		return
+	if foe.counter_open():
+		dash_hit_done = true
+		foe._do_counter(self)
+		return
+	if float(foe.inv) > 0.0:
+		game.vfx.burst(foe.position + Vector3(0, 0.9, 0), Color.WHITE, 4, 3.0, 0.07, 0.3)
+		return
+	dash_hit_done = true
+	foe.hp = maxf(0.0, float(foe.hp) - NINJA_DASH_DMG)
+	foe.dmg += NINJA_DASH_DMG
+	var kk := NINJA_DASH_KB * 0.55 / float(foe.mass)
+	foe.v = Vector3(_dd.x * kk, 0, _dd.z * kk)
+	foe.vy = 3.0
+	foe.st = "stun"
+	foe.t = 0.0
+	foe.stun = 0.25
+	foe.flash = 0.14
+	foe.atk = null
+	var chest: Vector3 = foe.position + Vector3(0, 0.9, 0)
+	game.vfx.flash(chest, 0.7, Color(0.75, 0.55, 1.0))
+	game.vfx.burst(chest, Color(0.5, 0.35, 0.8), 8, 4.0, 0.08, 0.35)
+	game.vfx.damage_number(foe.position + Vector3(0, 2.0, 0), str(int(NINJA_DASH_DMG)), Color(0.75, 0.55, 1.0), false)
+	game.audio.play("hitL")
+	game.shake = maxf(game.shake, 0.15 * game.shake_amt)
 
 
 func start_ride() -> void:
@@ -968,12 +1526,163 @@ func _fire_gun(big: bool) -> void:
 	game.fire_bullet(self, mpos, dir, cfg)
 
 
+func _slash_hit_foe(stage: int) -> void:
+	# M1 hit resolution from the stage table (dmg/range in atk).
+	# Hits 1-2 use the ordinary arc window; hit 3 is the separate
+	# radial finisher check with ground shockwave + heavy feedback.
+	if foe == null or String(foe.st) == "ko":
+		return
+	var dmg: float = float(atk["dmg"])
+	var rng: float = float(atk["range"])
+	var dx: float = foe.position.x - position.x
+	var dz: float = foe.position.z - position.z
+	if Vector2(dx, dz).length() > rng + 0.45:
+		return
+	if stage < 3:
+		var d0 := maxf(Vector2(dx, dz).length(), 0.01)
+		if d0 > 0.01 and (dx * face.x + dz * face.z) / d0 < float(atk["arc"]):
+			return
+	if float(foe.inv) > 0.0:
+		game.vfx.burst(foe.position + Vector3(0, 0.9, 0), Color.WHITE, 4, 3.0, 0.07, 0.3)
+		return
+	foe.hp = maxf(0.0, float(foe.hp) - dmg)
+	foe.dmg += dmg
+	var d := maxf(Vector2(dx, dz).length(), 0.01)
+	var kk := float(atk["kb"]) * 0.55 / float(foe.mass)
+	var flat := Vector3(dx / d, 0, dz / d)
+	foe.v = Vector3(flat.x * kk, 0, flat.z * kk)
+	foe.vy = float(atk["vy"])
+	foe.st = "stun"
+	foe.t = 0.0
+	foe.stun = 0.4 if stage == 3 else 0.3
+	foe.flash = 0.14
+	foe.atk = null
+	var chest: Vector3 = foe.position + Vector3(0, 0.9, 0)
+	if stage < 3:
+		for i in 12:
+			var sc := Color(0.71, 1.0, 0.29) if i % 2 == 0 else Color.WHITE
+			game.vfx.emit(chest, Vector3(randf_range(-4, 4), randf_range(1, 5), randf_range(-4, 4)), sc, 0.07, 0.35, 10.0)
+		game.vfx.flash(chest, 0.9, Color.WHITE)
+		game.audio.play("hitH")
+		game.shake = maxf(game.shake, float(atk["sh"]) * game.shake_amt)
+	else:
+		# Finisher: white-hot core + violet flash, ground shockwave +
+		# soft outer ring, sparks, dust, debris, light pop, shake.
+		var gp: Vector3 = foe.position
+		game.vfx.flash(chest, 1.2, Color.WHITE)
+		game.vfx.flash(Vector3(gp.x, 0.6, gp.z), 1.6, Color(0.75, 0.55, 1.0))
+		game.vfx.light_pop(Vector3(gp.x, 0.6, gp.z), Color(0.7, 0.55, 1.0), 2.5, 0.25)
+		game.vfx.ring(gp, Color(0.71, 1.0, 0.29), 0.3, 3.4, 0.45)
+		game.vfx.ring(gp, Color(0.71, 1.0, 0.29), 0.5, 5.2, 0.6, 0.3)
+		for j in 16:
+			var sjc := Color(0.71, 1.0, 0.29) if j % 2 == 0 else Color.WHITE
+			game.vfx.emit(chest, Vector3(randf_range(-5, 5), randf_range(1, 6), randf_range(-5, 5)), sjc, 0.08, 0.45, 10.0)
+		for k in 10:
+			var ka := (float(k) / 10.0) * TAU + randf_range(-0.2, 0.2)
+			game.vfx.emit(Vector3(gp.x, 0.15, gp.z), Vector3(cos(ka) * 5.0, 0.5, sin(ka) * 5.0), Color(0.72, 0.65, 0.54), 0.12, 0.7, 2.0)
+		game.vfx.burst(chest, Color(0.5, 0.48, 0.52), 8, 3.0, 0.12, 0.7)
+		game.audio.play("hitH")
+		game.hs = maxf(game.hs, float(atk["hs"]))
+		game.shake = maxf(game.shake, float(atk["sh"]) * game.shake_amt)
+	game.vfx.damage_number(foe.position + Vector3(0, 2.0, 0), str(int(dmg)),
+		Color.WHITE if stage == 3 else Color(0.71, 1.0, 0.29), stage == 3)
+	game.damage_props(position, rng + 0.6, dmg)
+
+
+func _fire_kunai() -> void:
+	# Thrown (not hitscan) from alternating fists like the reference: the
+	# kunai sticks into whoever it hits and detonates after a fuse instead
+	# of dealing its damage up front. (Hand toggled in start_atk so the
+	# windup pose already uses the throwing arm.)
+	var hand_node: Node3D = kunai_node_r if kunai_hand else kunai_node
+	var mpos := global_transform.origin + face * 1.0 + Vector3(0, 0.8, 0)
+	if hand_node != null:
+		var tip := hand_node.get_node_or_null("Tip") as Node3D
+		if tip != null:
+			mpos = tip.global_transform.origin
+	# Straight level flight along facing from the hand at y 0.65: constant
+	# velocity, no homing, no spread, so the travel reads as a straight line.
+	mpos.y = 0.65
+	var dir := face
+	var col := Color(0.75, 0.89, 1.0)
+	# HTML releaseKunai(): 6 launch sparks 0xbfe3ff + shake 0.05.
+	game.vfx.flash(mpos, 0.5, col)
+	for i in 6:
+		game.vfx.emit(mpos, Vector3(dir.x * 3.0 + randf_range(-1, 1), randf() * 2.0, dir.z * 3.0 + randf_range(-1, 1)), col, 0.06, 0.25, 0.0)
+	game.audio.play("shot")
+	game.shake = maxf(game.shake, 0.05 * game.shake_amt)
+	var cfg := {"speed": float(ATK_KUNAI["speed"]), "life": float(ATK_KUNAI["life"]),
+		"dmg": float(ATK_KUNAI["dmg"]), "kb": float(ATK_KUNAI["kb"]), "vy": float(ATK_KUNAI["vy"]),
+		"stun": 0.25, "big": false, "kunai": true, "col": col}
+	game.fire_bullet(self, mpos, dir, cfg)
+
+
+func attach_stuck(node: Node3D = null) -> void:
+	# Embed the real thrown kunai in this fighter: reparent it under `model`
+	# keeping its world transform, so it visibly sticks out of the impact
+	# point and follows every movement, knockback and animation until the
+	# detonation frees it. Falls back to a fresh procedural kunai if the
+	# projectile node is already gone.
+	var entry := {"fuse": STICK_FUSE, "t": 0.0, "node": null}
+	stuck.append(entry)
+	var inst := node
+	if inst == null or not is_instance_valid(inst):
+		inst = make_kunai_node()
+		model.add_child(inst)
+		inst.position = Vector3(randf_range(-0.25, 0.25), randf_range(0.7, 1.1), randf_range(-0.2, 0.2))
+		inst.rotation = Vector3(randf_range(-0.3, 0.3), randf() * TAU, randf_range(-0.3, 0.3))
+	else:
+		var gt := (inst as Node3D).global_transform
+		(inst as Node3D).get_parent().remove_child(inst)
+		model.add_child(inst)
+		(inst as Node3D).global_transform = gt
+	entry["node"] = inst
+
+
+func clear_stuck() -> void:
+	for s in stuck:
+		var n: Node3D = s.get("node", null)
+		if n != null and is_instance_valid(n):
+			n.queue_free()
+	stuck.clear()
+	_restore_armed_mats()
+
+
+func _snapshot_armed_mats() -> void:
+	if not armed_snap.is_empty():
+		return
+	for m in mats:
+		var sm := m as StandardMaterial3D
+		if sm != null:
+			armed_snap.append([sm, sm.albedo_color, sm.emission])
+
+
+func _restore_armed_mats() -> void:
+	for e in armed_snap:
+		var sm: StandardMaterial3D = e[0]
+		if is_instance_valid(sm):
+			sm.albedo_color = e[1]
+			sm.emission = e[2]
+	armed_snap.clear()
+
+
+func _deploy_smoke() -> void:
+	# Thrown bomb (HTML releaseBomb): lands facing*4.2, clamped to arena,
+	# bursts into tick-damage cloud r 3.8 / life 5.5 / tick 0.5 / dmg 3.
+	var land := position + face * 4.2
+	land.x = clampf(land.x, -4.4, 4.4)
+	land.z = clampf(land.z, -4.4, 4.4)
+	land.y = 0.0
+	game.deploy_cloud(self, land, NINJA_CLOUD_R, NINJA_CLOUD_LIFE, NINJA_CLOUD_TICK, NINJA_CLOUD_DMG, Color(0.4, 0.38, 0.45))
+
+
 func _do_counter(other) -> void:
 	if counter_done:
 		return
 	counter_done = true
 	other.hp = maxf(0.0, float(other.hp) - COUNTER_DMG)
 	other.dmg += COUNTER_DMG
+	game.vfx.damage_number(other.position + Vector3(0, 2.0, 0), str(int(COUNTER_DMG)), Color(0.85, 0.75, 1.0), false)
 	var kk := COUNTER_KB * 0.55 / float(other.mass)
 	var away: Vector3 = (other.position - position)
 	away.y = 0.0
@@ -1011,6 +1720,7 @@ func _bash_hit() -> void:
 		return
 	foe.hp = maxf(0.0, float(foe.hp) - float(ATK_BASH["dmg"]))
 	foe.dmg += float(ATK_BASH["dmg"])
+	game.vfx.damage_number(foe.position + Vector3(0, 2.0, 0), str(int(float(ATK_BASH["dmg"]))), Color(0.85, 0.75, 1.0), false)
 	var kk := float(ATK_BASH["kb"]) * 0.55 / float(foe.mass)
 	foe.v = Vector3(face.x * kk, 0, face.z * kk)
 	foe.vy = float(ATK_BASH["vy"])
@@ -1045,6 +1755,7 @@ func _sweep_check() -> void:
 		return
 	foe.hp = maxf(0.0, float(foe.hp) - float(ATK_SWEEP["dmg"]))
 	foe.dmg += float(ATK_SWEEP["dmg"])
+	game.vfx.damage_number(foe.position + Vector3(0, 2.0, 0), str(int(float(ATK_SWEEP["dmg"]))), Color(0.85, 0.75, 1.0), false)
 	var kk := float(ATK_SWEEP["kb"]) * 0.55 / float(foe.mass)
 	var flat := Vector3(to.x, 0, to.z)
 	flat = flat.normalized() if flat.length() > 0.01 else face
@@ -1098,6 +1809,8 @@ func strike() -> void:
 	foe.flash = 0.14
 	foe.atk = null
 	var hp_pos: Vector3 = foe.position + Vector3(0, 0.9 + foe.position.y, 0)
+	game.vfx.damage_number(foe.position + Vector3(0, 2.0, 0), str(int(float(atk["dmg"]))),
+		Color.WHITE if heavy else Color(0.85, 0.75, 1.0), heavy)
 	game.vfx.flash(hp_pos, 0.9 if heavy else 0.55, Color.WHITE)
 	game.vfx.burst(hp_pos, body_col, 16 if heavy else 7, 7.0 if heavy else 4.5, 0.1, 0.45)
 	if heavy:
@@ -1113,6 +1826,7 @@ func strike() -> void:
 
 
 func anim(dt: float, tnow: float) -> void:
+	_nj_arms = false
 	var sp := Vector2(v.x, v.z).length()
 	ph += dt * sp * 2.4
 	var w := minf(1.0, sp / 4.5)
@@ -1123,6 +1837,8 @@ func anim(dt: float, tnow: float) -> void:
 	var twist := 0.0
 	if sword_node != null:
 		sword_node.rotation = Vector3.ZERO
+	if katana_node != null:
+		katana_node.rotation = Vector3.ZERO
 	if shield_node != null:
 		shield_node.position = SHIELD_REST
 	if st == "free" and sp < 0.5:
@@ -1142,6 +1858,46 @@ func anim(dt: float, tnow: float) -> void:
 			E[1] = 1.2
 			U[0] = 0.0
 			U[1] = 0.0
+		elif kind == "slash1" or kind == "slash2" or kind == "slash3":
+			# Katana pivot animation per M1 stage (hands are driven by
+			# _nj_drive_hands). Hit 1 = HTML slashPose sweep.
+			lean = 0.45
+			sq = 1.08
+			E[0] = 1.2
+			E[1] = 1.2
+			U[0] = 0.0
+			U[1] = 0.0
+			if katana_node != null:
+				if kind == "slash1":
+					var phi := 0.9
+					var tilt := -0.5 * clampf(t / 0.1, 0.0, 1.0)
+					if t < 0.1:
+						phi = lerpf(0.9, 2.2, _nj_eo(t / 0.1))
+					else:
+						phi = lerpf(2.2, -1.8, _nj_eio(minf(1.0, (t - 0.1) / 0.22)))
+						tilt = lerpf(-0.5, 0.15, clampf((t - 0.1) / 0.22, 0.0, 1.0))
+					katana_node.rotation = Vector3(tilt, phi, 0.0)
+				elif kind == "slash2":
+					# Rising backhand: coil further back, reverse sweep with
+					# the blade lifting upward + an early sword roll.
+					var phi2 := -1.8
+					if t < 0.06:
+						phi2 = lerpf(-1.8, -2.4, _nj_eo(t / 0.06))
+					else:
+						phi2 = lerpf(-2.4, 1.8, _nj_eio(minf(1.0, (t - 0.06) / 0.24)))
+					var lift := -0.2 - 0.7 * sin(PI * clampf((t - 0.06) / 0.24, 0.0, 1.0)) if t >= 0.06 else -0.2 * (t / 0.06)
+					var roll := 0.8 * sin(PI * clampf(t / 0.12, 0.0, 1.0))
+					katana_node.rotation = Vector3(lift, phi2, roll)
+				else:
+					# Overhead slam: raise behind the head, chop down.
+					var rx := 0.2
+					if t < 0.22:
+						rx = lerpf(0.2, -2.3, _nj_eo(t / 0.22))
+					elif t < 0.38:
+						rx = lerpf(-2.3, 0.9, _nj_eio((t - 0.22) / 0.16))
+					else:
+						rx = lerpf(0.9, 0.2, _nj_eio(minf(1.0, (t - 0.38) / 0.4)))
+					katana_node.rotation = Vector3(rx, 0.0, 0.0)
 		elif kind == "upper":
 			if u < W:
 				var e := u / maxf(W, 0.001)
@@ -1194,6 +1950,35 @@ func anim(dt: float, tnow: float) -> void:
 			E[1] = 0.4 + 0.8 * a_u + rk * 0.15
 			U[0] = 0.15 + 0.1 * a_u + rk * 0.15
 			U[1] = 0.2 + 0.2 * a_u + rk * 0.25
+		elif kind == "kunai":
+			# Overhand throw (HTML POSE kunai: wind 0.07, rel 0.11, T 0.34).
+			var k_u := clampf(t / 0.11, 0.0, 1.0)
+			var snap := 0.0
+			if t >= 0.11:
+				snap = sin(clampf((t - 0.11) / 0.23, 0.0, 1.0) * PI)
+			lean = 0.12 - snap * 0.25
+			sq = 1.0
+			var tr := 1 if kunai_hand else 0
+			var hr := 1 - tr
+			E[hr] = 0.25 + 0.2 * k_u
+			E[tr] = 0.2
+			U[hr] = 0.1 + 0.1 * k_u
+			U[tr] = -0.6 * k_u + 1.3 * snap
+			var kn_pos := KUNAI_REST + Vector3(0, snap * 0.15, 0.15 * k_u)
+			if kunai_node != null:
+				kunai_node.position = kn_pos
+			if kunai_node_r != null:
+				kunai_node_r.position = kn_pos
+		elif kind == "smoke":
+			# Crouch-drop the bomb: sink, arms sweep down, then rise.
+			var s_u := clampf(t / 0.55, 0.0, 1.0)
+			var drop := sin(clampf(s_u, 0.0, 1.0) * PI)
+			lean = 0.3 * drop
+			sq = 1.0 - 0.12 * drop
+			E[0] = 0.3 + 0.5 * drop
+			E[1] = 0.3 + 0.5 * drop
+			U[0] = 0.2 + 0.4 * drop
+			U[1] = 0.2 + 0.4 * drop
 		elif kind == "counter":
 			var brace := clampf(t / 0.2, 0.0, 1.0) * (1.0 - clampf((t - 0.7) / 0.4, 0.0, 1.0))
 			lean = -0.12 * brace
@@ -1332,52 +2117,32 @@ func anim(dt: float, tnow: float) -> void:
 			horse_root.rotation.x = g.x
 			horse_root.position.y = g.y
 			horse_root.scale = Vector3(1.0 / sqrt(maxf(g.z, 0.05)), g.z, 1.0 + (1.0 - g.z) * 0.6)
-	# Attack Animator overrides (menu editor, additive deltas).
-	var _ov := {}
-	var _ov_arm := 0.0
-	var _ov_srx := 0.0
-	var _ov_sry := 0.0
-	var _ov_ss := 0.0
-	var _ov_shx := 0.0
-	var _ov_shy := 0.0
-	var _ov_shz := 0.0
-	var _ov_shs := 0.0
-	if st == "atk" and atk != null:
-		var _kind2 := String(atk["kind"])
-		var _W2: float = float(atk.get("w", 0.3))
-		var _A2: float = float(atk.get("a", 0.3))
-		var _ph := 0
-		if t >= _W2 + _A2:
-			_ph = 2
-		elif t >= _W2:
-			_ph = 1
-		_ov = get_anim_ov(skin_name, _kind2, _ph)
-		if not _ov.is_empty():
-			lean += float(_ov.get("lean", 0.0))
-			sq += float(_ov.get("sq", 0.0))
-			twist += float(_ov.get("twist", 0.0))
-			E[0] = float(E[0]) + float(_ov.get("e0", 0.0))
-			E[1] = float(E[1]) + float(_ov.get("e1", 0.0))
-			U[0] = float(U[0]) + float(_ov.get("u0", 0.0))
-			U[1] = float(U[1]) + float(_ov.get("u1", 0.0))
-			_ov_arm = float(_ov.get("arm_scale", 0.0))
-			_ov_srx = float(_ov.get("sword_rx", 0.0))
-			_ov_sry = float(_ov.get("sword_ry", 0.0))
-			_ov_ss = float(_ov.get("sword_s", 0.0))
-			_ov_shx = float(_ov.get("shield_x", 0.0))
-			_ov_shy = float(_ov.get("shield_y", 0.0))
-			_ov_shz = float(_ov.get("shield_z", 0.0))
-			_ov_shs = float(_ov.get("shield_s", 0.0))
-	for k in 2:
-		var s := 1.0 if k == 1 else -1.0
-		var arm: Node3D = arm_r if k == 1 else arm_l
-		var x := clampf(float(E[k]), 0.0, 1.0)
-		var sw := (la if k == 1 else -la) * 0.35
-		var hv2 := atk != null and bool(atk["big"])
-		arm.position = Vector3(s * (0.62 - 0.3 * x),
-			0.55 + float(U[k]) + (0.2 * x if st == "atk" else 0.0) + (RIDE_LIFT if st == "ride" else 0.0),
-			float(E[k]) + sw)
-		arm.scale = Vector3.ONE * (1.0 + 0.45 * x * (1.0 if hv2 else 0.4)) * (1.0 + _ov_arm)
+	# Ninja procedural hands (HTML basePose/actPose/slashPose): drive the
+	# arms directly and let the HTML lean/twist win over the generic ones.
+	if _is_ninja() and (st == "free" or st == "dash" or (st == "atk" and atk != null and String(atk["kind"]) in ["kunai", "smoke", "slash1", "slash2", "slash3"])):
+		_nj_drive_hands(dt, tnow, sp > 0.5)
+		lean = nj_lean
+		twist = nj_twist
+		if st == "atk" and atk != null and String(atk["kind"]) == "slash3":
+			if t < 0.22:
+				lean = 0.2
+			elif t < 0.48:
+				lean = 0.55
+			else:
+				lean = lerpf(0.55, 0.0, clampf((t - 0.48) / 0.3, 0.0, 1.0))
+	else:
+		nj_stretch = false
+	if not _nj_arms:
+		for k in 2:
+			var s := 1.0 if k == 1 else -1.0
+			var arm: Node3D = arm_r if k == 1 else arm_l
+			var x := clampf(float(E[k]), 0.0, 1.0)
+			var sw := (la if k == 1 else -la) * 0.35
+			var hv2 := atk != null and bool(atk["big"])
+			arm.position = Vector3(s * (0.62 - 0.3 * x),
+				0.55 + float(U[k]) + (0.2 * x if st == "atk" else 0.0) + (RIDE_LIFT if st == "ride" else 0.0),
+				float(E[k]) + sw)
+			arm.scale = Vector3.ONE * (1.0 + 0.45 * x * (1.0 if hv2 else 0.4))
 	model.rotation.x = lean
 	model.rotation.z = tw
 	if st == "atk" and atk != null and String(atk["kind"]) == "spin":
@@ -1385,14 +2150,8 @@ func anim(dt: float, tnow: float) -> void:
 	else:
 		model.rotation.y = twist
 	model.scale = Vector3(1.0 / sqrt(maxf(sq, 0.05)), maxf(sq, 0.05), 1.0 / sqrt(maxf(sq, 0.05)))
-	if sword_node != null and (_ov_srx != 0.0 or _ov_sry != 0.0 or _ov_ss != 0.0):
-		sword_node.rotation.x += _ov_srx
-		sword_node.rotation.y += _ov_sry
-		sword_node.scale *= (1.0 + _ov_ss)
-	if shield_node != null and (_ov_shx != 0.0 or _ov_shy != 0.0 or _ov_shz != 0.0 or _ov_shs != 0.0):
-		shield_node.position += Vector3(_ov_shx, _ov_shy, _ov_shz)
-		shield_node.scale *= (1.0 + _ov_shs)
-	_apply_custom_clip()
+	if nj_stretch and _is_ninja():
+		model.scale = Vector3(0.8, 0.8, 1.5)
 	model.position.y = absf(sin(ph)) * 0.06 * w
 	if skin_inst != null and is_instance_valid(skin_inst):
 		var lift := 0.0
@@ -1414,9 +2173,50 @@ func anim(dt: float, tnow: float) -> void:
 			rifle_node.rotation.x = -sin(clampf((t - 0.35) / 0.65, 0.0, 1.0) * PI) * 0.55
 		else:
 			rifle_node.rotation.x = 0.0
+	# HTML katana visibility: swordPivot.visible only during the slash.
+	if katana_node != null and _is_ninja():
+		katana_node.visible = st == "atk" and atk != null and String(atk["kind"]) in ["slash1", "slash2", "slash3"]
+	# Held bomb visible in the right fist during the smoke wind-up only
+	# (HTML heldB, released at rel).
+	if bomb_node != null:
+		bomb_node.visible = _is_ninja() and st == "atk" and atk != null and String(atk["kind"]) == "smoke" and t < float(atk["w"])
+	var throwing := st == "atk" and atk != null and String(atk["kind"]) == "kunai"
+	if kunai_node != null:
+		kunai_node.visible = throwing and not kunai_hand
+		if not throwing:
+			kunai_node.position = KUNAI_REST
+	if kunai_node_r != null:
+		kunai_node_r.visible = throwing and kunai_hand
+		if not throwing:
+			kunai_node_r.position = KUNAI_REST
 	if horse_root != null:
 		horse_root.visible = st == "ride"
 	rotation.y = ang
 	var e4 := 0.8 if flash > 0.0 else 0.05
-	for m in mats:
-		(m as StandardMaterial3D).emission = Color(e4, e4, e4)
+	if stuck.is_empty():
+		_restore_armed_mats()
+		for m in mats:
+			(m as StandardMaterial3D).emission = Color(e4, e4, e4)
+	else:
+		# Armed fuse blink (html/ninjasetup.html): body albedo pulses
+		# toward hot red with accelerating frequency as the fuse runs down,
+		# overriding the normal hit flash until detonation.
+		_snapshot_armed_mats()
+		var k := 0.0
+		for s in stuck:
+			k = maxf(k, clampf(float(s["t"]) / maxf(float(s["fuse"]), 0.01), 0.0, 1.0))
+		var pulse := sin(tnow * (14.0 + k * 50.0)) * 0.5 + 0.5
+		for m in mats:
+			var sm := m as StandardMaterial3D
+			if sm == null:
+				continue
+			var orig: Array = _armed_orig(sm)
+			sm.albedo_color = (orig[0] as Color).lerp(Color(1.0, 0.16, 0.16), pulse)
+			sm.emission = Color(pulse, 0.0, 0.0)
+
+
+func _armed_orig(sm: StandardMaterial3D) -> Array:
+	for e in armed_snap:
+		if e[0] == sm:
+			return [e[1], e[2]]
+	return [sm.albedo_color, sm.emission]

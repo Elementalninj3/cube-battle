@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://bklyxvukpfrap"
+path="res://.godot/imported/DeadTree_4.obj-f4260deddbc5f591a85f66a112fb0378.mesh"
+
+[deps]
+
+files=["res://.godot/imported/DeadTree_4.obj-f4260deddbc5f591a85f66a112fb0378.mesh"]
+
+source_file="res://free assets/Stylized Nature MegaKit[Standard]/OBJ/DeadTree_4.obj"
+dest_files=["res://.godot/imported/DeadTree_4.obj-f4260deddbc5f591a85f66a112fb0378.mesh", "res://.godot/imported/DeadTree_4.obj-f4260deddbc5f591a85f66a112fb0378.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

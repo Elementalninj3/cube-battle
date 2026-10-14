@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://dewtmwamtw7i8"
+path="res://.godot/imported/Pine_3.obj-a6f7f1d2d134f206c71828e9de9ca4ea.mesh"
+
+[deps]
+
+files=["res://.godot/imported/Pine_3.obj-a6f7f1d2d134f206c71828e9de9ca4ea.mesh"]
+
+source_file="res://free assets/Stylized Nature MegaKit[Standard]/OBJ/Pine_3.obj"
+dest_files=["res://.godot/imported/Pine_3.obj-a6f7f1d2d134f206c71828e9de9ca4ea.mesh", "res://.godot/imported/Pine_3.obj-a6f7f1d2d134f206c71828e9de9ca4ea.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

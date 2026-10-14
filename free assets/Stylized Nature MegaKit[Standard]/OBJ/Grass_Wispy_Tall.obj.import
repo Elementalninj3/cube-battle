@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://hmp7ofwo2kbd"
+path="res://.godot/imported/Grass_Wispy_Tall.obj-46490ec4c94784fab213dc8a70c0279e.mesh"
+
+[deps]
+
+files=["res://.godot/imported/Grass_Wispy_Tall.obj-46490ec4c94784fab213dc8a70c0279e.mesh"]
+
+source_file="res://free assets/Stylized Nature MegaKit[Standard]/OBJ/Grass_Wispy_Tall.obj"
+dest_files=["res://.godot/imported/Grass_Wispy_Tall.obj-46490ec4c94784fab213dc8a70c0279e.mesh", "res://.godot/imported/Grass_Wispy_Tall.obj-46490ec4c94784fab213dc8a70c0279e.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false
