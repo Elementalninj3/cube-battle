@@ -3,15 +3,17 @@
 importer="texture"
 type="CompressedTexture2D"
 uid="uid://law3sjeu5tj3"
-path="res://.godot/imported/Bark_NormalTree.png-ae980633eb5487e4d5506294dbbaf3bd.ctex"
+path.s3tc="res://.godot/imported/Bark_NormalTree.png-ae980633eb5487e4d5506294dbbaf3bd.s3tc.ctex"
+path.etc2="res://.godot/imported/Bark_NormalTree.png-ae980633eb5487e4d5506294dbbaf3bd.etc2.ctex"
 metadata={
-"vram_texture": false
+"imported_formats": ["s3tc_bptc", "etc2_astc"],
+"vram_texture": true
 }
 
 [deps]
 
 source_file="res://free assets/Stylized Nature MegaKit[Standard]/Textures/Bark_NormalTree.png"
-dest_files=["res://.godot/imported/Bark_NormalTree.png-ae980633eb5487e4d5506294dbbaf3bd.ctex"]
+dest_files=["res://.godot/imported/Bark_NormalTree.png-ae980633eb5487e4d5506294dbbaf3bd.s3tc.ctex", "res://.godot/imported/Bark_NormalTree.png-ae980633eb5487e4d5506294dbbaf3bd.etc2.ctex"]
 
 [params]
 

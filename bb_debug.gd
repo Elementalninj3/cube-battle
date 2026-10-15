@@ -29,7 +29,6 @@ func _ready() -> void:
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mat.no_depth_test = true
 	_mi.material_override = mat
-	_mi.extra_cull_margin = 50.0
 	add_child(_mi)
 
 

@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://openworld/ow2_world.gd" id="1"]
+
+[node name="OW2World" type="Node3D"]
+script = ExtResource("1")

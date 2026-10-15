@@ -7,31 +7,40 @@ extends RefCounted
 #   fighter does wx = ix - iy, wz = -ix - iy.
 # Solving gives ix = (dx - dz) / 2, iy = -(dx + dz) / 2.
 static func iso_for(d: Vector2) -> Vector2:
-	if d.length() < 0.001:
+	var len_sq := d.x * d.x + d.y * d.y
+	if len_sq < 0.000001:
 		return Vector2.ZERO
-	var n := d.normalized()
-	return Vector2((n.x - n.y) * 0.5, -(n.x + n.y) * 0.5)
+	var inv := 1.0 / sqrt(len_sq)
+	var nx := d.x * inv
+	var ny := d.y * inv
+	return Vector2((nx - ny) * 0.5, -(nx + ny) * 0.5)
 
 
 static func flat_dist(a: Vector3, b: Vector3) -> float:
-	return Vector2(a.x - b.x, a.z - b.z).length()
+	var dx := a.x - b.x
+	var dz := a.z - b.z
+	return sqrt(dx * dx + dz * dz)
 
 
 # Push a ground position out of obstacle circles (trees/rocks). Returns the
 # corrected position; y is preserved.
 static func push_out(pos: Vector3, obstacles: Array) -> Vector3:
+	if obstacles.is_empty():
+		return pos
 	var out := pos
 	for o in obstacles:
 		var op: Vector2 = o["p"]
 		var dx := out.x - op.x
 		var dz := out.z - op.y
-		var d := Vector2(dx, dz).length()
 		var want := float(o["r"]) + 0.45
-		if d < want:
-			if d < 0.001:
-				dx = 1.0
-				dz = 0.0
-				d = 1.0
-			out.x = op.x + dx / d * want
-			out.z = op.y + dz / d * want
+		var d_sq := dx * dx + dz * dz
+		if d_sq >= want * want:
+			continue
+		var d := sqrt(maxf(d_sq, 0.000001))
+		if d < 0.001:
+			dx = 1.0
+			dz = 0.0
+			d = 1.0
+		out.x = op.x + dx / d * want
+		out.z = op.y + dz / d * want
 	return out

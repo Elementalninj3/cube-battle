@@ -45,23 +45,60 @@ var clouds: Array = []
 var _bullet_mesh: BoxMesh
 var _bullet_mats := {}
 const BULLET_R := 0.75
+# Pooled box tracers: fan-fire and rifles otherwise alloc + free a
+# MeshInstance per shot. Kunai stay instantiated (4-mesh procedural nodes,
+# low rate, reparented into victims on hit).
+var _tracer_pool: Array = []
+# Shared smoke-bomb mesh + material (was a new SphereMesh + StandardMaterial
+# per thrown bomb).
+var _cloud_mesh: SphereMesh = null
+var _cloud_mat: StandardMaterial3D = null
+var _last_hp_frac := -1.0
+var _last_hp_text := ""
+var _last_obj := ""
 
 const ENEMY_HP := {"ninja": 95.0, "cubeknight": 130.0, "cubecowboy": 85.0}
 const MELEE_KINDS := ["punch", "slash1", "slash2", "slash3", "bash", "sweep", "spin", "upper"]
+
+# ---- pickups (coins; OW1 supplies spots, others default to none) ----
+var coins: Array = []
+var coins_collected := 0
+var coins_total := 0
+var _coin_mesh: CylinderMesh = null
+var _coin_mat: StandardMaterial3D = null
+var _coin_label: Label
+var _last_coin_text := ""
 
 # ---- HUD ----
 var _hp_fill: ColorRect
 var _hp_label: Label
 var _obj_label: Label
 var _info_label: Label
+var _fps_label: Label
+var _fps_t := 0.0
+
+
+# Subclass hook: Open World 1 / 2 override this to supply their own
+# environment builder while sharing all gameplay, camera and HUD code.
+func get_builder():
+	return Builder
+
+
+func _objective_text() -> String:
+	return "Explore the voxel meadow — combat practice"
+
+
+func _player_bounds() -> float:
+	return 19.0
 
 
 func _ready() -> void:
 	_build_env()
-	var built: Dictionary = Builder.build(self)
+	var built: Dictionary = get_builder().build(self)
 	obstacles = built["obstacles"]
 	camps = built["camps"]
 	spawn = built["spawn"]
+	_spawn_coins(built.get("coins", []))
 	vfx = VfxScript.new()
 	add_child(vfx)
 	audio = AudioScript.new()
@@ -78,36 +115,27 @@ func _ready() -> void:
 
 
 func _build_env() -> void:
+	# Grass Render lighting, copied from grass_render.gd (the demo is the
+	# source of truth): white background, flat ambient color, single
+	# neutral sun 45 degrees down with 2-split shadows. No sky shader, no
+	# tonemap override, no fog, no rim light, no atlas resizing.
 	var we := WorldEnvironment.new()
 	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	var psm := ProceduralSkyMaterial.new()
-	psm.sky_top_color = Color(0.35, 0.62, 0.92)
-	psm.sky_horizon_color = Color(0.82, 0.92, 0.95)
-	psm.ground_bottom_color = Color(0.2, 0.35, 0.18)
-	psm.ground_horizon_color = Color(0.7, 0.8, 0.7)
-	sky.sky_material = psm
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.set("fog_enabled", true)
-	env.set("fog_light_color", Color(0.82, 0.9, 0.9))
-	env.set("fog_depth_begin", 70.0)
-	env.set("fog_depth_end", 160.0)
+	env.background_mode = Environment.BG_COLOR
+	env.background_color = Color(1, 1, 1)
+	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	env.ambient_light_color = Color(0.695381, 0.644979, 0.598817)
 	we.environment = env
 	add_child(we)
 	var sun := DirectionalLight3D.new()
-	sun.light_color = Color(1.0, 0.96, 0.88)
-	sun.light_energy = 1.3
+	sun.rotation = Vector3(-PI / 4.0, 0, 0)
 	sun.shadow_enabled = true
-	sun.rotation = Vector3(-0.9, 0.6, 0)
+	sun.directional_shadow_mode = 1
+	sun.directional_shadow_split_1 = 0.01
+	# Bound the shadow range to the playable area: the default 100m renders
+	# shadow casters far outside the 44-68m worlds every frame.
+	sun.directional_shadow_max_distance = 60.0
 	add_child(sun)
-	var rim := DirectionalLight3D.new()
-	rim.light_color = Color(0.62, 0.82, 1.0)
-	rim.light_energy = 0.45
-	rim.shadow_enabled = false
-	rim.rotation = Vector3(-0.4, -2.4, 0)
-	add_child(rim)
 
 
 func _spawn_player() -> void:
@@ -121,7 +149,7 @@ func _spawn_player() -> void:
 	player.ai_enabled = true
 	add_child(player)
 	player.setup_skin("ninja")
-	player.bounds = 31.0
+	player.bounds = _player_bounds()
 	player.reset_match(spawn, PI)
 	player.foe = null
 
@@ -134,6 +162,66 @@ func _spawn_enemies() -> void:
 			e.setup(self, str(skin), (c as Dictionary)["pos"], float(ENEMY_HP.get(skin, 100.0)))
 			e.body.foe = player
 			enemies.append(e)
+
+
+func _spawn_coins(spots: Array) -> void:
+	# Shared gold disc mesh + material for every coin (14 nodes, 1 material,
+	# no shadows). Empty for worlds without pickups.
+	if spots.is_empty():
+		return
+	if _coin_mesh == null:
+		_coin_mesh = CylinderMesh.new()
+		_coin_mesh.top_radius = 0.28
+		_coin_mesh.bottom_radius = 0.28
+		_coin_mesh.height = 0.08
+		_coin_mesh.radial_segments = 12
+	if _coin_mat == null:
+		_coin_mat = StandardMaterial3D.new()
+		_coin_mat.albedo_color = Color(1.0, 0.78, 0.25)
+		_coin_mat.metallic = 0.7
+		_coin_mat.roughness = 0.3
+		_coin_mat.emission_enabled = true
+		_coin_mat.emission = Color(0.55, 0.38, 0.08)
+		_coin_mat.emission_energy_multiplier = 0.7
+	var i := 0
+	for sp in spots:
+		var p: Vector2 = sp
+		var mi := MeshInstance3D.new()
+		mi.name = "Coin%d" % i
+		mi.mesh = _coin_mesh
+		mi.material_override = _coin_mat
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.position = Vector3(p.x, 0.6, p.y)
+		add_child(mi)
+		coins.append({"pos": Vector3(p.x, 0.6, p.y), "node": mi,
+			"taken": false, "phase": randf() * TAU})
+		i += 1
+	coins_total = coins.size()
+	coins_collected = 0
+
+
+func _upd_coins() -> void:
+	# Flat-distance pickup check (14 iterations max, skipped entirely when
+	# no coins exist or all are taken).
+	if coins.is_empty() or coins_collected >= coins_total:
+		return
+	if dead_t >= 0.0 or player == null or not player.visible:
+		return
+	var pp: Vector3 = player.position
+	for c in coins:
+		if bool(c["taken"]):
+			continue
+		var cp: Vector3 = c["pos"]
+		var dx := pp.x - cp.x
+		var dz := pp.z - cp.z
+		if dx * dx + dz * dz > 1.96: # 1.4m radius
+			continue
+		c["taken"] = true
+		(c["node"] as Node3D).visible = false
+		coins_collected += 1
+		vfx.flash(cp, 0.6, Color(1.0, 0.85, 0.3))
+		vfx.burst(cp, Color(1.0, 0.8, 0.3), 6, 3.0, 0.06, 0.35)
+		audio.play("coin")
 
 
 func player_targetable() -> bool:
@@ -163,6 +251,7 @@ func _physics_process(dt: float) -> void:
 	_target_foe()
 	_player_move()
 	player.upd(dt, true)
+	_upd_coins()
 	_splash(dt)
 	for e in enemies:
 		e.tick(dt, player.position, player_targetable())
@@ -232,10 +321,11 @@ func _player_move_iv(iv: Vector2) -> void:
 func _splash(_dt: float) -> void:
 	if dead_t >= 0.0:
 		return
-	if String(player.st) == "dash":
+	var pst: String = player.st
+	if pst == "dash":
 		_splash_hit(null, FighterScript.NINJA_DASH_DMG, FighterScript.NINJA_DASH_KB, 1.3, true, 3.0, 0.25)
 		return
-	if String(player.st) != "atk" or player.atk == null:
+	if pst != "atk" or player.atk == null:
 		return
 	var kind := String(player.atk["kind"])
 	if not kind in MELEE_KINDS:
@@ -384,32 +474,53 @@ func _bullet_mat(big: bool, bc: Color) -> StandardMaterial3D:
 	return _bullet_mats[key]
 
 
+func _obtain_tracer() -> MeshInstance3D:
+	if _tracer_pool.is_empty():
+		var bx := MeshInstance3D.new()
+		bx.mesh = _bullet_mesh
+		bx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(bx)
+		return bx
+	var bx2 := _tracer_pool.pop_back() as MeshInstance3D
+	bx2.visible = true
+	return bx2
+
+
+func _release_tracer(mi: MeshInstance3D) -> void:
+	mi.visible = false
+	mi.position = Vector3.ZERO
+	if _tracer_pool.size() < 32:
+		_tracer_pool.append(mi)
+	else:
+		mi.queue_free()
+
+
 func fire_bullet(owner: Node3D, mpos: Vector3, dir: Vector3, cfg: Dictionary) -> void:
 	var mi: Node3D = null
 	var sp: float = float(cfg.get("speed", 22.0))
 	var bc: Color = cfg.get("col", Color(1.0, 0.8, 0.35))
-	if bool(cfg.get("kunai", false)):
+	var is_kunai := bool(cfg.get("kunai", false))
+	if is_kunai:
 		mi = FighterScript.make_kunai_node()
 		mi.scale = Vector3.ONE * FighterScript.NINJA_KUNAI_THROWN_SCALE
 		mi.rotation.y = atan2(dir.x, dir.z)
 		for ch in (mi as Node).get_children():
 			if ch is GeometryInstance3D:
 				(ch as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
 	else:
-		var bx := MeshInstance3D.new()
+		var bx := _obtain_tracer()
 		bx.mesh = _bullet_mesh
 		bx.scale = Vector3(0.09, 0.09, 0.28 + sp * 0.012)
 		bx.rotation.y = atan2(dir.x, dir.z)
 		bx.material_override = _bullet_mat(bool(cfg.get("big", false)), bc)
-		bx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mi = bx
-	add_child(mi)
 	mi.position = mpos
 	bullets.append({"node": mi, "p": mpos, "v": dir.normalized() * sp,
 		"life": float(cfg.get("life", 0.45)), "dmg": float(cfg.get("dmg", 4.0)),
 		"kb": float(cfg.get("kb", 2.5)), "vy": float(cfg.get("vy", 2.0)),
 		"stun": float(cfg.get("stun", 0.18)), "big": bool(cfg.get("big", false)),
-		"kunai": bool(cfg.get("kunai", false)),
+		"kunai": is_kunai,
 		"owner": owner, "col": bc, "trail": 0.0})
 
 
@@ -423,6 +534,8 @@ func _seg_point(a: Vector3, b: Vector3, p: Vector3) -> float:
 
 
 func _upd_bullets(dt: float) -> void:
+	if bullets.is_empty():
+		return
 	for i in range(bullets.size() - 1, -1, -1):
 		var b: Dictionary = bullets[i]
 		b["life"] = float(b["life"]) - dt
@@ -510,6 +623,14 @@ func _stick_kunai(i: int, f) -> void:
 func _upd_stuck(dt: float, play: bool) -> void:
 	if not play:
 		return
+	if (player as Node).get("stuck").is_empty():
+		var any_stuck := false
+		for e in enemies:
+			if e.alive and not (e.body as Node).get("stuck").is_empty():
+				any_stuck = true
+				break
+		if not any_stuck:
+			return
 	for f in _live_bodies():
 		if String(f.st) == "ko" or not (f as Node3D).visible:
 			f.clear_stuck()
@@ -604,7 +725,11 @@ func _kill_bullet(i: int, impacted: bool) -> void:
 	var b: Dictionary = bullets[i]
 	if impacted:
 		vfx.burst(b["p"], b["col"], 6, 3.0, 0.07, 0.3)
-	(b["node"] as Node3D).queue_free()
+	var nd := b["node"] as Node3D
+	if bool(b.get("kunai", false)):
+		nd.queue_free()
+	else:
+		_release_tracer(nd as MeshInstance3D)
 	bullets.remove_at(i)
 
 
@@ -618,23 +743,27 @@ func deploy_cloud(owner: Node3D, pos: Vector3, radius: float, life: float,
 
 
 func _cloud_bomb() -> MeshInstance3D:
+	if _cloud_mesh == null:
+		_cloud_mesh = SphereMesh.new()
+		_cloud_mesh.radius = 0.17
+		_cloud_mesh.height = 0.34
+	if _cloud_mat == null:
+		_cloud_mat = StandardMaterial3D.new()
+		_cloud_mat.albedo_color = Color(0.10, 0.06, 0.19)
+		_cloud_mat.roughness = 0.5
+		_cloud_mat.emission_enabled = true
+		_cloud_mat.emission = Color(0.33, 0.33, 0.38)
+		_cloud_mat.emission_energy_multiplier = 0.6
 	var bm := MeshInstance3D.new()
-	var sm := SphereMesh.new()
-	sm.radius = 0.17
-	sm.height = 0.34
-	bm.mesh = sm
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.10, 0.06, 0.19)
-	m.roughness = 0.5
-	m.emission_enabled = true
-	m.emission = Color(0.33, 0.33, 0.38)
-	m.emission_energy_multiplier = 0.6
-	bm.material_override = m
+	bm.mesh = _cloud_mesh
+	bm.material_override = _cloud_mat
 	bm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return bm
 
 
 func _upd_clouds(dt: float) -> void:
+	if clouds.is_empty():
+		return
 	for i in range(clouds.size() - 1, -1, -1):
 		var c: Dictionary = clouds[i]
 		var p: Vector3 = c["p"]
@@ -754,11 +883,15 @@ func _build_hud() -> void:
 	_hp_label.size = Vector2(258, 26)
 	_hp_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	layer.add_child(_hp_label)
-	_obj_label = _hud_label("Defeat the camp raiders!", 22, Vector2(-320, 12), Control.PRESET_CENTER_TOP)
+	_coin_label = _hud_label("", 18, Vector2(16, 44), Control.PRESET_TOP_LEFT)
+	_coin_label.size = Vector2(258, 26)
+	_coin_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
+	layer.add_child(_coin_label)
+	_obj_label = _hud_label(_objective_text(), 22, Vector2(-320, 12), Control.PRESET_CENTER_TOP)
 	_obj_label.size = Vector2(640, 30)
 	_obj_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	layer.add_child(_obj_label)
-	var hint := _hud_label("WASD move · J/K attacks · L kunai · P smoke · Space dash   |   MMB-drag orbit · wheel zoom · Q/E turn · R reset cam · Esc menu",
+	var hint := _hud_label("WASD move · J/K attacks · L kunai · P smoke · Space dash   |   MMB-click / E: rotate +90° · Q: rotate -90° · wheel zoom · R reset cam · Esc menu",
 		14, Vector2(-560, -30), Control.PRESET_CENTER_BOTTOM)
 	hint.size = Vector2(1120, 22)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -776,6 +909,8 @@ func _build_hud() -> void:
 	menu_b.custom_minimum_size = Vector2(80, 32)
 	menu_b.pressed.connect(_on_menu)
 	layer.add_child(menu_b)
+	_fps_label = _hud_label("-- FPS", 15, Vector2(-110, -40), Control.PRESET_BOTTOM_RIGHT)
+	layer.add_child(_fps_label)
 
 
 func _on_menu() -> void:
@@ -783,16 +918,38 @@ func _on_menu() -> void:
 
 
 func _upd_hud() -> void:
+	# Event-driven HUD: fill/label/objective text only rewrite on change.
+	# The old code resized ColorRects and assigned Label text every physics
+	# tick, forcing container relayout at 60Hz.
 	var frac := clampf(player.hp / 100.0, 0.0, 1.0)
-	_hp_fill.size = Vector2(258.0 * frac, 20.0)
-	if frac > 0.6:
-		_hp_fill.color = Color(0.3, 0.8, 0.3)
-	elif frac > 0.3:
-		_hp_fill.color = Color(0.95, 0.8, 0.25)
-	else:
-		_hp_fill.color = Color(0.9, 0.3, 0.25)
-	_hp_label.text = str(int(ceil(player.hp)))
-	_obj_label.text = "Defeat the camp raiders!   Raiders left: %d   Defeated: %d" % [alive_enemies(), kills]
+	if absf(frac - _last_hp_frac) > 0.001:
+		_last_hp_frac = frac
+		_hp_fill.size = Vector2(258.0 * frac, 20.0)
+		if frac > 0.6:
+			_hp_fill.color = Color(0.3, 0.8, 0.3)
+		elif frac > 0.3:
+			_hp_fill.color = Color(0.95, 0.8, 0.25)
+		else:
+			_hp_fill.color = Color(0.9, 0.3, 0.25)
+	var ht := str(int(ceil(player.hp)))
+	if ht != _last_hp_text:
+		_last_hp_text = ht
+		_hp_label.text = ht
+	if coins_total > 0:
+		var ct := "Coins %d/%d" % [coins_collected, coins_total]
+		if ct != _last_coin_text:
+			_last_coin_text = ct
+			_coin_label.text = ct
+	elif _coin_label != null:
+		_coin_label.visible = false
+	var ot := _objective_text()
+	if ot != _last_obj:
+		_last_obj = ot
+		_obj_label.text = ot
+	_fps_t += get_process_delta_time()
+	if _fps_t >= 0.5:
+		_fps_t = 0.0
+		_fps_label.text = str(Engine.get_frames_per_second()) + " FPS"
 	# Camera shake (translation only, keeps the orbit rig intact).
 	if shake > 0.0:
 		cam.position.x += randf_range(-0.5, 0.5) * shake
@@ -807,6 +964,15 @@ func _input(event: InputEvent) -> void:
 			_on_menu()
 
 
-func _process(_dt: float) -> void:
-	# Camera follows the player node directly; nothing per-frame here besides HUD.
-	pass
+func _process(dt: float) -> void:
+	# Coin idle motion: spin + bob. Skipped entirely in worlds without coins
+	# or once everything is collected.
+	if coins.is_empty() or coins_collected >= coins_total:
+		return
+	for c in coins:
+		if bool(c["taken"]):
+			continue
+		var nd := c["node"] as Node3D
+		nd.rotation.y += dt * 3.0
+		var bp: Vector3 = c["pos"]
+		nd.position.y = bp.y + sin(now * 3.0 + float(c["phase"])) * 0.12

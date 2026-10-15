@@ -1,39 +1,43 @@
 extends RefCounted
-## Open-world environment builder: assembles the explorable nature area from
-## the downloaded assets (BinbunGrass shaders + Stylized Nature Megakit).
+## Open-world builder: hybrid Binbun-grass + voxel environment, matching the
+## Grass Render demo's look and rendering approach.
 ##
-## Layout is hand-designed (not random scatter): a central meadow, N-S and
-## E-W dirt paths, four themed groves, a landmark twisted tree, boulder
-## clusters and three enemy camps, ringed by a pine border wall.
-## Everything is deterministic (seeded) so the world is identical each run.
+## Layer A (ground): one 44x44 Binbun-shaded plane (world-space coloring,
+## seamless at any size) + one instanced grass-blade MultiMesh, exactly the
+## demo's approach. No per-tile nodes.
+##
+## Layer B (voxel structures): a central dais, two block walls and two
+## floating platforms on pillars, merged into ONE MultiMesh (dirt bases +
+## grass checker caps, 1 draw call) with a few exact StaticBody boxes.
+## The fighter assumes flat ground (bb_fighter lands at y=0), so solid
+## structures block movement via push-out circles instead of being climbed.
 ##
 ## Returned dict: {obstacles, spawn, camps, grass_count}
-##   obstacles: Array of {"p": Vector2, "r": float} push-out circles used by
-##     gameplay movement, grass rejection and enemy placement validation.
-##   camps: Array of {"pos": Vector3, "skins": PackedStringArray}.
 
-# Converted 1:1 from the Stylized Nature Megakit's .gltf sources (same
-# meshes, materials and embedded textures). The original downloads in
-# "free assets" stay untouched as the source of truth; KIT_SRC is the
-# fallback source used when the .glb has no import data yet (e.g. the
-# project was never opened in the GUI editor since the models arrived).
-const KIT := "res://openworld/models/"
-const KIT_SRC := "res://free assets/Stylized Nature MegaKit[Standard]/glTF/"
 const GRASS_DIR := "res://free assets/grassshader/assets/BinbunGrass/src/"
 
-const WORLD_R := 31.0 # playable half-extent (fighters clamp to this)
-const GRASS_R := 32.0 # grass field half-extent
-const GRASS_COUNT := 9000
+const HALF := 20.0 # playable half-extent (fighters clamp to 19)
 const SEED := 1234
+const GRASS_COUNT := 11000 # open meadow with clusters, one instanced draw
+const CLEAR_C := Vector2(0, 4) # central combat clearing (ellipse radii)
+const CLEAR_R := Vector2(10, 8)
+const DIRT_COL := Color(0.42, 0.3, 0.2)
 
-# Palette copied 1:1 from BinbunGrass palette_01.tres so the ground shader
-# and the grass shader use the exact downloaded colors.
+# Palette copied 1:1 from BinbunGrass palette_01.tres so ground and blades
+# use the downloaded shader's exact intended colors.
 const PALETTE := [Color(0.658824, 0.792157, 0.345098),
 	Color(0.458824, 0.654902, 0.262745),
 	Color(0.27451, 0.509804, 0.196078)]
 
 
+static var _noise_cached: NoiseTexture2D = null
+static var _grad_cached: GradientTexture2D = null
+static var _wind_cached: NoiseTexture2D = null
+
+
 static func _noise_tex(seed: int, freq: float, size: int = 256) -> NoiseTexture2D:
+	if _noise_cached != null and _noise_cached.width == size:
+		return _noise_cached
 	var fn := FastNoiseLite.new()
 	fn.seed = seed
 	fn.frequency = freq
@@ -43,10 +47,25 @@ static func _noise_tex(seed: int, freq: float, size: int = 256) -> NoiseTexture2
 	nt.seamless = true
 	nt.seamless_blend_skirt = 0.2
 	nt.noise = fn
+	_noise_cached = nt
 	return nt
 
 
+static func _gradient_tex() -> GradientTexture2D:
+	if _grad_cached != null:
+		return _grad_cached
+	var g := Gradient.new()
+	g.offsets = PackedFloat32Array([0.166667, 0.5, 0.833333])
+	g.colors = PackedColorArray([PALETTE[0], PALETTE[1], PALETTE[2]])
+	var gt := GradientTexture2D.new()
+	gt.gradient = g
+	_grad_cached = gt
+	return gt
+
+
 static func _wind_tex() -> NoiseTexture2D:
+	if _wind_cached != null:
+		return _wind_cached
 	var fn := FastNoiseLite.new()
 	fn.noise_type = FastNoiseLite.TYPE_SIMPLEX
 	fn.fractal_octaves = 3
@@ -56,20 +75,11 @@ static func _wind_tex() -> NoiseTexture2D:
 	nt.seamless = true
 	nt.seamless_blend_skirt = 0.2
 	nt.noise = fn
+	_wind_cached = nt
 	return nt
 
 
-static func _gradient_tex() -> GradientTexture2D:
-	var g := Gradient.new()
-	g.offsets = PackedFloat32Array([0.166667, 0.5, 0.833333])
-	g.colors = PackedColorArray([PALETTE[0], PALETTE[1], PALETTE[2]])
-	var gt := GradientTexture2D.new()
-	gt.gradient = g
-	return gt
-
-
-# Binbun ground.gdshader with the downloaded palette + noise setup, so the
-# ground and the grass blades share one look (no seams / color mismatch).
+# The downloaded Binbun ground.gdshader, demo (grass_ground_01.tres) setup.
 static func make_ground_material() -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = load(GRASS_DIR + "shader/ground.gdshader")
@@ -78,10 +88,9 @@ static func make_ground_material() -> ShaderMaterial:
 	return m
 
 
-# Binbun grass.gdshader with the downloaded demo configuration
-# (billboard quads, 2x2 shape atlas, dithered alpha) plus a gentle breeze
-# (the demo ships wind_velocity (0,0); the shader's wind path is wired up
-# and animated via TIME, so a light breeze shows the intended motion).
+# The downloaded Binbun grass.gdshader, demo (grass_01.tres) setup:
+# billboard quads, 2x2 shape atlas, dithered alpha, gentle breeze (the demo
+# ships wind_velocity (0,0); a light breeze shows the intended TIME wind).
 static func make_grass_material() -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = load(GRASS_DIR + "shader/grass.gdshader")
@@ -100,262 +109,247 @@ static func make_grass_material() -> ShaderMaterial:
 	return m
 
 
-# Template = one off-tree Node3D per model; placements duplicate() it, so
-# meshes/materials stay shared. Prefers the imported .glb; falls back to
-# parsing the kit's .gltf at runtime when import data is missing.
-static func _load_template(model: String) -> Node3D:
-	# Skip load() entirely when there is no import data: it would only log
-	# a "No loader found" error before the fallback below handles it.
-	if FileAccess.file_exists(KIT + model + ".glb.import"):
-		var packed := load(KIT + model + ".glb") as PackedScene
-		if packed != null and packed.can_instantiate():
-			return packed.instantiate() as Node3D
-	push_warning("OW: using runtime .gltf fallback for " + model + " (open the project in the editor once to import the .glb).")
-	return _runtime_template(model)
-
-
-static func _runtime_template(model: String) -> Node3D:
-	var doc := GLTFDocument.new()
-	var st := GLTFState.new()
-	var err := doc.append_from_file(KIT_SRC + model + ".gltf", st)
-	if err != OK:
-		push_error("OW: cannot load megakit model " + model)
-		return Node3D.new()
-	var root := doc.generate_scene(st) as Node3D
-	_slim_runtime_materials(root)
-	return root
-
-
-# Runtime-loaded ImageTextures stay uncompressed in RAM: cap albedo at
-# 1024 px (with mipmaps) and drop normal maps (stylized look doesn't need
-# them). Imported .glb assets already get engine texture compression, so
-# this only applies to the fallback path.
-static func _slim_runtime_materials(root: Node) -> void:
-	var seen := {}
-	var stack: Array = [root]
-	while not stack.is_empty():
-		var cur: Node = stack.pop_back()
-		if cur is MeshInstance3D:
-			var mi := cur as MeshInstance3D
-			var mesh := mi.mesh
-			if mesh != null:
-				for s in mesh.get_surface_count():
-					_slim_material(mesh.surface_get_material(s), seen)
-		for c in cur.get_children():
-			stack.append(c)
-
-
-static func _slim_material(m: Material, seen: Dictionary) -> void:
-	if not (m is StandardMaterial3D) or seen.has(m.get_instance_id()):
-		return
-	seen[m.get_instance_id()] = true
-	var sm := m as StandardMaterial3D
-	sm.normal_enabled = false
-	var tex: Texture2D = sm.albedo_texture
-	if tex != null:
-		var img := tex.get_image()
-		if img != null and not img.is_empty():
-			if maxi(img.get_width(), img.get_height()) > 1024:
-				var k := 1024.0 / float(maxi(img.get_width(), img.get_height()))
-				img.resize(int(img.get_width() * k), int(img.get_height() * k))
-			if not img.has_mipmaps():
-				img.generate_mipmaps()
-			sm.albedo_texture = ImageTexture.create_from_image(img)
+# Arena-style grass checker for voxel cap tiles.
+static func _cap_color(gx: int, gz: int, rng: RandomNumberGenerator) -> Color:
+	var v := 0.44 + rng.randf() * 0.05 + float((gx + gz) % 2) * 0.025
+	return Color.from_hsv(0.29 + rng.randf() * 0.02, 0.5, v)
 
 
 static func build(world: Node3D) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
+	_build_ground(world)
 	var obstacles: Array = []
-	var kit_cache := {}
+	_build_voxels(world, rng, obstacles)
+	var grass_count := _plant_grass(world, rng)
+	return {"obstacles": obstacles, "spawn": Vector3(0, 0, 14),
+		"camps": [], "grass_count": grass_count}
 
-	var get_scene := func(model):
-		if not kit_cache.has(model):
-			kit_cache[model] = _load_template(model)
-		return kit_cache[model]
 
-	# --- ground: Binbun-shaded meadow + darker horizon skirt ---
+static func _build_ground(world: Node3D) -> void:
+	# Layer A: single Binbun plane + one ground collision box.
 	var ground := MeshInstance3D.new()
 	ground.name = "Ground"
 	var gp := PlaneMesh.new()
-	gp.size = Vector2(96, 96)
+	gp.size = Vector2(HALF * 2.0 + 4.0, HALF * 2.0 + 4.0)
 	ground.mesh = gp
 	ground.material_override = make_ground_material()
+	# The big flat cash-crop: no shadow-pass work for the ground itself.
+	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	world.add_child(ground)
-	var skirt := MeshInstance3D.new()
-	skirt.name = "Skirt"
-	var sp := PlaneMesh.new()
-	sp.size = Vector2(400, 400)
-	skirt.mesh = sp
-	skirt.position.y = -0.08
-	var smat := StandardMaterial3D.new()
-	smat.albedo_color = Color(0.16, 0.32, 0.13)
-	smat.roughness = 1.0
-	skirt.material_override = smat
-	world.add_child(skirt)
-
-	# --- dirt paths (flat RockPath pieces, no collision) ---
-	var path_rects: Array = [
-		{"x0": -2.0, "x1": 2.0, "z0": -30.0, "z1": 30.0}, # N-S main
-		{"x0": -30.0, "x1": 30.0, "z0": 1.0, "z1": 5.0}, # E-W branch
-	]
-	_lay_path(world, get_scene, rng, Vector2(0, -28), Vector2(0, 28), 2.0)
-	_lay_path(world, get_scene, rng, Vector2(-28, 3), Vector2(28, 3), 2.0)
-
-	# --- trees, rocks, decor (hand-placed clusters + seeded variants) ---
-	_grove(world, get_scene, rng, obstacles, Vector2(-17, -13), 8.0,
-		["CommonTree_1", "CommonTree_2", "CommonTree_3", "CommonTree_4", "CommonTree_5"], 12, 1.0)
-	_grove(world, get_scene, rng, obstacles, Vector2(17, -13), 8.0,
-		["Pine_1", "Pine_2", "Pine_3", "Pine_4", "Pine_5"], 11, 1.0)
-	_grove(world, get_scene, rng, obstacles, Vector2(16, 15), 6.0,
-		["DeadTree_1", "DeadTree_2", "DeadTree_3", "DeadTree_4", "DeadTree_5"], 5, 0.9)
-	# SW landmark: hero twisted tree + stones.
-	_place(world, get_scene, rng, obstacles, "TwistedTree_1", Vector2(-16, 15), 1.7, true)
-	_place(world, get_scene, rng, obstacles, "TwistedTree_3", Vector2(-19, 12), 1.1, true)
-	_place(world, get_scene, rng, obstacles, "Rock_Medium_1", Vector2(-13, 17), 1.8, true)
-	_place(world, get_scene, rng, obstacles, "Rock_Medium_3", Vector2(-18, 18), 1.3, true)
-	# Boulder cluster mid-west + scattered loners.
-	_place(world, get_scene, rng, obstacles, "Rock_Medium_2", Vector2(-9, -2), 2.0, true)
-	_place(world, get_scene, rng, obstacles, "Rock_Medium_1", Vector2(-11, 0), 1.4, true)
-	_place(world, get_scene, rng, obstacles, "Rock_Medium_3", Vector2(-7, 1), 1.1, true)
-	_place(world, get_scene, rng, obstacles, "Rock_Medium_2", Vector2(8, -9), 1.6, true)
-	_place(world, get_scene, rng, obstacles, "Rock_Medium_1", Vector2(-4, 11), 1.2, true)
-	_place(world, get_scene, rng, obstacles, "CommonTree_3", Vector2(6, 12), 1.1, true)
-	_place(world, get_scene, rng, obstacles, "Pine_2", Vector2(-6, -12), 1.2, true)
-	# Bushes / flowers / pebbles / clover (decor only, never block).
-	_scatter(world, get_scene, rng, ["Bush_Common", "Bush_Common_Flowers"], 22, 0.9, 1.4, obstacles, path_rects)
-	_scatter(world, get_scene, rng, ["Pebble_Square_1", "Pebble_Square_3", "Pebble_Square_5"], 16, 0.8, 1.6, obstacles, path_rects)
-	_scatter(world, get_scene, rng, ["Clover_1", "Clover_2", "Plant_1", "Plant_7"], 26, 0.8, 1.3, obstacles, path_rects)
-	# Pine border wall (visual boundary, outside the playable clamp).
-	for i in 36:
-		var a := TAU * float(i) / 36.0 + rng.randf_range(-0.05, 0.05)
-		var pos := Vector2(cos(a), sin(a)) * 34.0
-		_place(world, get_scene, rng, obstacles, "Pine_%d" % rng.randi_range(1, 5), pos,
-			rng.randf_range(1.2, 1.7), false)
-
-	# --- Binbun grass field (one instanced draw, rejection-sampled) ---
-	var grass_count := _plant_grass(world, rng, obstacles, path_rects)
-
-	var camps := [
-		{"pos": Vector3(9, 0, 4), "skins": PackedStringArray(["ninja", "ninja"])},
-		{"pos": Vector3(-11, 0, 6), "skins": PackedStringArray(["cubeknight", "cubeknight", "cubecowboy"])},
-		{"pos": Vector3(15, 0, 14), "skins": PackedStringArray(["cubecowboy", "cubeknight"])},
-	]
-	return {"obstacles": obstacles, "spawn": Vector3(0, 0, 20),
-		"camps": camps, "grass_count": grass_count}
+	var body := StaticBody3D.new()
+	body.name = "GroundBody"
+	body.collision_layer = 2
+	body.collision_mask = 0
+	var shape := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(HALF * 2.0, 1.0, HALF * 2.0)
+	shape.shape = box
+	body.position = Vector3(0, -0.5, 0)
+	body.add_child(shape)
+	world.add_child(body)
 
 
-static func _in_rect(p: Vector2, r: Dictionary) -> bool:
-	return p.x >= float(r["x0"]) and p.x <= float(r["x1"]) and p.y >= float(r["z0"]) and p.y <= float(r["z1"])
+# Layer B: merged voxel structures. Dirt bases + grass caps go in one
+# MultiMesh (1 draw call); solid ones get one exact StaticBody each.
+# rects/tops feed grass placement (footprint rejection + cap-top blades).
+static func _build_voxels(world: Node3D, rng: RandomNumberGenerator, obstacles: Array) -> void:
+	var boxes: Array = [] # {pos, size, col}
+	var solids: Array = [] # {pos, size} collision boxes
+	var rects: Array = [] # {c: Vector2, r: Vector2} grass rejection footprints
+	var tops: Array = [] # {c: Vector2, r: Vector2, y: float} blade beds on caps
+
+	# Dirt skirt under the plane rim (finishes the plate edge, 1 instance).
+	boxes.append({"pos": Vector3(0, -0.54, 0),
+		"size": Vector3(HALF * 2.0, 1.0, HALF * 2.0), "col": DIRT_COL})
+	# Central dais 5x5x1 at (-7,-5): dirt base + 25 checker caps.
+	_add_block(world, boxes, solids, rects, tops, obstacles, rng,
+		Vector2(-7, -5), Vector2(5, 5), 1.0, true, 3.0)
+	# Two low walls (cover obstacles): 4x1 and 3x1, 1m tall.
+	_add_block(world, boxes, solids, rects, tops, obstacles, rng,
+		Vector2(7.5, 2), Vector2(4, 1), 1.0, true, 0.0)
+	_add_block(world, boxes, solids, rects, tops, obstacles, rng,
+		Vector2(-2, -12), Vector2(3, 1), 1.0, true, 0.0)
+	# Stepped formation east: 4x4 base half-height with a 2x2 second step.
+	_add_block(world, boxes, solids, rects, tops, obstacles, rng,
+		Vector2(12, -2), Vector2(4, 4), 0.5, true, 0.0)
+	_add_block(world, boxes, solids, rects, tops, obstacles, rng,
+		Vector2(12, -2), Vector2(2, 2), 1.0, true, 0.0)
+	# Low grassy ledge south-west: 2x2, half height.
+	_add_block(world, boxes, solids, rects, tops, obstacles, rng,
+		Vector2(-13, -6), Vector2(2, 2), 0.5, true, 0.0)
+	# Two floating platforms 3x3 (slab y 2.4..2.9) on slim pillars.
+	_add_float(world, boxes, obstacles, rects, tops, rng, Vector2(7, -8))
+	_add_float(world, boxes, obstacles, rects, tops, rng, Vector2(-12, 6))
+
+	var bm := BoxMesh.new()
+	bm.size = Vector3.ONE
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.85
+	bm.material = mat
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = bm
+	mm.instance_count = boxes.size()
+	for i in boxes.size():
+		var b: Dictionary = boxes[i]
+		mm.set_instance_transform(i,
+			Transform3D(Basis.from_scale(b["size"]), b["pos"]))
+		mm.set_instance_color(i, b["col"])
+	var mmi := MultiMeshInstance3D.new()
+	mmi.name = "Voxels"
+	mmi.multimesh = mm
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	world.add_child(mmi)
+	for s in solids:
+		var sd: Dictionary = s
+		var body := StaticBody3D.new()
+		body.collision_layer = 2
+		body.collision_mask = 0
+		var shape := CollisionShape3D.new()
+		var bs := BoxShape3D.new()
+		bs.size = sd["size"]
+		shape.shape = bs
+		body.position = sd["pos"]
+		body.add_child(shape)
+		world.add_child(body)
+	# Stash layout for grass: world stores it on itself for _plant_grass.
+	world.set_meta("ow_rects", rects)
+	world.set_meta("ow_tops", tops)
 
 
-static func _blocked(p: Vector2, obstacles: Array, path_rects: Array, margin: float) -> bool:
-	for o in obstacles:
-		if p.distance_to(o["p"]) < float(o["r"]) + margin:
+# Solid checker block: dirt base (y 0..h) + grass cap tiles on top.
+# Extra circle r_extra (dais) or footprint-derived circles block movement.
+static func _add_block(world: Node3D, boxes: Array, solids: Array,
+		rects: Array, tops: Array, obstacles: Array, rng: RandomNumberGenerator,
+		center: Vector2, footprint: Vector2, h: float, solid: bool,
+		extra_r: float) -> void:
+	var top_y := h
+	boxes.append({"pos": Vector3(center.x, top_y * 0.5, center.y),
+		"size": Vector3(footprint.x, top_y, footprint.y), "col": DIRT_COL})
+	var gx0 := int(center.x - footprint.x * 0.5)
+	var gz0 := int(center.y - footprint.y * 0.5)
+	for ix in int(footprint.x):
+		for iz in int(footprint.y):
+			boxes.append({"pos": Vector3(gx0 + ix + 0.5, top_y + 0.06, gz0 + iz + 0.5),
+				"size": Vector3(0.985, 0.12, 0.985),
+				"col": _cap_color(gx0 + ix, gz0 + iz, rng)})
+	if solid:
+		solids.append({"pos": Vector3(center.x, top_y * 0.5, center.y),
+			"size": Vector3(footprint.x, top_y, footprint.y)})
+	rects.append({"c": center, "r": footprint * 0.5 + Vector2(0.4, 0.4)})
+	tops.append({"c": center, "r": footprint * 0.5 - Vector2(0.4, 0.4),
+		"y": top_y + 0.12})
+	if extra_r > 0.0:
+		obstacles.append({"p": center, "r": extra_r})
+	else:
+		# One circle per ~2 blocks along the long axis.
+		var n := maxi(1, int(maxf(footprint.x, footprint.y) / 2.0))
+		for i in n:
+			var f := (float(i) + 0.5) / float(n) - 0.5
+			if footprint.x >= footprint.y:
+				obstacles.append({"p": center + Vector2(f * footprint.x, 0), "r": 1.1})
+			else:
+				obstacles.append({"p": center + Vector2(0, f * footprint.y), "r": 1.1})
+
+
+# Floating 3x3 slab with grass caps on a slim pillar. The slab is above
+# head height (player top ~1.9): only the pillar blocks movement.
+static func _add_float(world: Node3D, boxes: Array, obstacles: Array,
+		rects: Array, tops: Array, rng: RandomNumberGenerator,
+		center: Vector2) -> void:
+	var slab_y := 2.4
+	boxes.append({"pos": Vector3(center.x, slab_y + 0.25, center.y),
+		"size": Vector3(3, 0.5, 3), "col": DIRT_COL})
+	var gx0 := int(center.x - 1.5)
+	var gz0 := int(center.y - 1.5)
+	for ix in 3:
+		for iz in 3:
+			boxes.append({"pos": Vector3(gx0 + ix + 0.5, slab_y + 0.56, gz0 + iz + 0.5),
+				"size": Vector3(0.985, 0.12, 0.985),
+				"col": _cap_color(gx0 + ix, gz0 + iz, rng)})
+	boxes.append({"pos": Vector3(center.x, slab_y * 0.5, center.y),
+		"size": Vector3(0.4, slab_y, 0.4), "col": DIRT_COL})
+	var body := StaticBody3D.new()
+	body.collision_layer = 2
+	body.collision_mask = 0
+	var shape := CollisionShape3D.new()
+	var bs := BoxShape3D.new()
+	bs.size = Vector3(0.4, slab_y, 0.4)
+	shape.shape = bs
+	body.position = Vector3(center.x, slab_y * 0.5, center.y)
+	body.add_child(shape)
+	world.add_child(body)
+	rects.append({"c": center, "r": Vector2(0.6, 0.6)})
+	obstacles.append({"p": center, "r": 0.65})
+	tops.append({"c": center, "r": Vector2(1.1, 1.1), "y": slab_y + 0.62})
+
+
+static func _rect_has(rects: Array, p: Vector2) -> bool:
+	for r in rects:
+		var rd: Dictionary = r
+		var d: Vector2 = (p - (rd["c"] as Vector2)).abs()
+		if d.x <= (rd["r"] as Vector2).x and d.y <= (rd["r"] as Vector2).y:
 			return true
-	for r in path_rects:
-		if _in_rect(p, r):
-			return true
-	if p.distance_to(Vector2(0, 20)) < 4.0: # spawn clearing
-		return true
 	return false
 
 
-static func _lay_path(world: Node3D, get_scene: Callable, rng: RandomNumberGenerator, a: Vector2, b: Vector2, half_w: float) -> void:
-	# Flat stepping-stone trail between two points.
-	var variants := ["RockPath_Round_Small_1", "RockPath_Round_Small_2", "RockPath_Round_Small_3",
-		"RockPath_Square_Small_1", "RockPath_Square_Small_2", "RockPath_Square_Small_3"]
-	var dist := a.distance_to(b)
-	var n := int(dist / 2.1)
-	for i in n + 1:
-		var p := a.lerp(b, float(i) / float(maxi(n, 1)))
-		p += Vector2(rng.randf_range(-0.5, 0.5), rng.randf_range(-0.5, 0.5))
-		var inst := (get_scene.call(variants[rng.randi_range(0, variants.size() - 1)]) as Node3D).duplicate() as Node3D
-		inst.position = Vector3(p.x, 0.03, p.y)
-		inst.rotation.y = rng.randf() * TAU
-		world.add_child(inst)
-
-
-static func _place(world: Node3D, get_scene: Callable, rng: RandomNumberGenerator, obstacles: Array,
-		model: String, pos: Vector2, scl: float, solid: bool) -> void:
-	var inst := (get_scene.call(model) as Node3D).duplicate() as Node3D
-	inst.position = Vector3(pos.x, 0, pos.y)
-	inst.rotation.y = rng.randf() * TAU
-	inst.scale = Vector3.ONE * scl
-	world.add_child(inst)
-	if not solid:
-		return
-	if model.begins_with("Rock"):
-		var body := StaticBody3D.new()
-		body.position = Vector3(pos.x, 0.8 * scl, pos.y)
-		var shape := CollisionShape3D.new()
-		var sphere := SphereShape3D.new()
-		sphere.radius = 1.5 * scl
-		shape.shape = sphere
-		body.add_child(shape)
-		world.add_child(body)
-		obstacles.append({"p": pos, "r": 1.6 * scl})
-	else: # tree trunk: slim cylinder, leaves stay walk-through-free
-		var body2 := StaticBody3D.new()
-		body2.position = Vector3(pos.x, 1.5, pos.y)
-		var shape2 := CollisionShape3D.new()
-		var cyl := CylinderShape3D.new()
-		cyl.radius = 0.4 * scl
-		cyl.height = 3.0
-		shape2.shape = cyl
-		body2.add_child(shape2)
-		world.add_child(body2)
-		obstacles.append({"p": pos, "r": 0.55 * scl})
-
-
-static func _grove(world: Node3D, get_scene: Callable, rng: RandomNumberGenerator, obstacles: Array,
-		center: Vector2, radius: float, models: Array, count: int, scl: float) -> void:
-	# Ring-ish cluster with a walkable middle: trees on annulus + 1-2 inside.
-	for i in count:
-		var a := TAU * float(i) / float(count) + rng.randf_range(-0.2, 0.2)
-		var rr := radius * rng.randf_range(0.55, 1.0)
-		_place(world, get_scene, rng, obstacles, str(models[rng.randi_range(0, models.size() - 1)]),
-			center + Vector2(cos(a), sin(a)) * rr, scl * rng.randf_range(0.9, 1.25), true)
-
-
-static func _scatter(world: Node3D, get_scene: Callable, rng: RandomNumberGenerator, models: Array,
-		count: int, s0: float, s1: float, obstacles: Array, path_rects: Array) -> void:
-	if count <= 0:
-		return
-	var placed := 0
-	var guard := 0
-	while placed < count and guard < count * 40:
-		guard += 1
-		var p := Vector2(rng.randf_range(-30, 30), rng.randf_range(-30, 30))
-		if _blocked(p, obstacles, path_rects, 0.4):
-			continue
-		_place(world, get_scene, rng, obstacles, str(models[rng.randi_range(0, models.size() - 1)]),
-			p, rng.randf_range(s0, s1), false)
-		placed += 1
-
-
-static func _plant_grass(world: Node3D, rng: RandomNumberGenerator, obstacles: Array, path_rects: Array) -> int:
-	# One MultiMeshInstance3D (the Binbun demo's intended approach): billboard
-	# quads, per-instance yaw/scale, no shadows, cheap static instancing.
+# Demo approach: billboard quads, per-instance yaw/scale, no shadows.
+# Blades cover the plane (minus structure footprints + spawn clearing)
+# with a small extra bed on each grass cap top.
+static func _plant_grass(world: Node3D, rng: RandomNumberGenerator) -> int:
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.4, 0.4)
+	quad.size = Vector2(0.5, 0.7)
 	quad.subdivide_width = 2
-	quad.subdivide_depth = 2
-	quad.center_offset = Vector3(0, 0.2, 0)
+	quad.subdivide_depth = 4
+	quad.center_offset = Vector3(0, 0.35, 0)
+	var qm := StandardMaterial3D.new()
+	qm.vertex_color_use_as_albedo = true
+	qm.roughness = 0.9
+	quad.material = qm
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.mesh = quad
 	mm.instance_count = GRASS_COUNT
+	var rects: Array = world.get_meta("ow_rects")
+	var tops: Array = world.get_meta("ow_tops")
 	var placed := 0
 	var guard := 0
 	while placed < GRASS_COUNT and guard < GRASS_COUNT * 6:
 		guard += 1
-		var p := Vector2(rng.randf_range(-GRASS_R, GRASS_R), rng.randf_range(-GRASS_R, GRASS_R))
-		if _blocked(p, obstacles, path_rects, 0.35):
+		# A share of blades goes to cap tops, the rest to the plane.
+		if placed % 12 == 11 and not tops.is_empty():
+			var t: Dictionary = tops[rng.randi_range(0, tops.size() - 1)]
+			var tc: Vector2 = t["c"]
+			var tr: Vector2 = t["r"]
+			var tp := Vector2(rng.randf_range(tc.x - tr.x, tc.x + tr.x),
+				rng.randf_range(tc.y - tr.y, tc.y + tr.y))
+			_place_blade(mm, placed, tp, float(t["y"]), rng)
+			placed += 1
 			continue
-		var s := rng.randf_range(0.8, 1.35)
-		var basis := Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * s)
-		mm.set_instance_transform(placed, Transform3D(basis, Vector3(p.x, 0, p.y)))
+		# ~2 in 9 blades clusters around structure edges instead of the
+		# open field, so density varies naturally instead of uniformly.
+		# Cluster blades are ~30% smaller than field blades.
+		if placed % 9 >= 7 and not rects.is_empty():
+			var cp := _cluster_point(rects, rng)
+			if cp.distance_to(Vector2(0, 14)) < 2.5:
+				continue
+			if _rect_has(rects, cp):
+				continue
+			_place_blade(mm, placed, cp, 0.0, rng, 0.7)
+			placed += 1
+			continue
+		var p := Vector2(rng.randf_range(-HALF, HALF),
+			rng.randf_range(-HALF, HALF))
+		if p.distance_to(Vector2(0, 14)) < 2.5: # spawn clearing
+			continue
+		if _in_clearing(p): # central combat clearing stays open
+			continue
+		if _rect_has(rects, p):
+			continue
+		_place_blade(mm, placed, p, 0.0, rng)
 		placed += 1
 	mm.visible_instance_count = placed
 	var mmi := MultiMeshInstance3D.new()
@@ -365,3 +359,38 @@ static func _plant_grass(world: Node3D, rng: RandomNumberGenerator, obstacles: A
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	world.add_child(mmi)
 	return placed
+
+
+static func _in_clearing(p: Vector2) -> bool:
+	var dx := (p.x - CLEAR_C.x) / CLEAR_R.x
+	var dy := (p.y - CLEAR_C.y) / CLEAR_R.y
+	return dx * dx + dy * dy < 1.0
+
+
+# A point just outside a random structure footprint edge: tufts hugging
+# platform rims and pillars rather than blanketing the field.
+static func _cluster_point(rects: Array, rng: RandomNumberGenerator) -> Vector2:
+	var rd: Dictionary = rects[rng.randi_range(0, rects.size() - 1)]
+	var c: Vector2 = rd["c"]
+	var r: Vector2 = rd["r"]
+	var side := rng.randi_range(0, 3)
+	var e := Vector2.ZERO
+	match side:
+		0:
+			e = Vector2(rng.randf_range(-r.x, r.x), -r.y)
+		1:
+			e = Vector2(rng.randf_range(-r.x, r.x), r.y)
+		2:
+			e = Vector2(-r.x, rng.randf_range(-r.y, r.y))
+		_:
+			e = Vector2(r.x, rng.randf_range(-r.y, r.y))
+	var a := rng.randf() * TAU
+	var d := rng.randf_range(0.5, 2.5)
+	return c + e + Vector2(cos(a), sin(a)) * d
+
+
+static func _place_blade(mm: MultiMesh, i: int, p: Vector2, y: float,
+		rng: RandomNumberGenerator, size_mul := 1.0) -> void:
+	var s := rng.randf_range(0.8, 1.35) * size_mul
+	var basis := Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * s)
+	mm.set_instance_transform(i, Transform3D(basis, Vector3(p.x, y, p.y)))

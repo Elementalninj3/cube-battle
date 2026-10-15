@@ -474,7 +474,7 @@ func _watch_foe_attacks() -> void:
 		_on_foe_attack_started(f)
 	foe_was_atk = now_atk
 	# Live projectiles heading our way (fair: they are visible in the world)
-	if game.bullets is Array:
+	if game.bullets is Array and not (game.bullets as Array).is_empty():
 		for b in game.bullets:
 			if not (b is Dictionary):
 				continue

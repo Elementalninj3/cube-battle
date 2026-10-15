@@ -26,6 +26,7 @@ var detect_r := 14.0
 
 var _bar_bg: MeshInstance3D
 var _bar_fg: MeshInstance3D
+var _last_frac := -1.0
 
 
 func setup(p_world, skin: String, camp_pos: Vector3, hp: float) -> void:
@@ -124,10 +125,16 @@ func tick(dt: float, player_pos: Vector3, player_targetable: bool) -> void:
 	_bar_fg.visible = alive and body.hp < max_hp
 	_bar_bg.visible = _bar_fg.visible
 	if _bar_fg.visible:
-		# Center-scaled (stays aligned under the body's yaw).
+		# Center-scaled (stays aligned under the body's yaw). Material and
+		# scale update only when hp actually moved (avoids per-tick
+		# shader-param writes for every visible enemy).
 		var frac := clampf(body.hp / max_hp, 0.0, 1.0)
-		_bar_fg.scale.x = maxf(frac, 0.001)
-		(_bar_fg.material_override as StandardMaterial3D).albedo_color = Color(0.9, 0.25, 0.2).lerp(Color(0.3, 0.85, 0.3), frac)
+		if absf(frac - _last_frac) > 0.002:
+			_last_frac = frac
+			_bar_fg.scale.x = maxf(frac, 0.001)
+			(_bar_fg.material_override as StandardMaterial3D).albedo_color = Color(0.9, 0.25, 0.2).lerp(Color(0.3, 0.85, 0.3), frac)
+	else:
+		_last_frac = -1.0
 	if not alive:
 		respawn_t -= dt
 		if respawn_t <= 0.0:

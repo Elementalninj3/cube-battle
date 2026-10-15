@@ -65,6 +65,11 @@ var bullets: Array = []
 var clouds: Array = []
 var _bullet_mesh: BoxMesh
 const BULLET_R := 0.75
+var _tracer_pool: Array = []
+var _cloud_mesh: SphereMesh = null
+var _cloud_mat: StandardMaterial3D = null
+var _last_cd_l := [-1.0, -1.0, -1.0]
+var _last_cd_r := [-1.0, -1.0, -1.0]
 
 
 func _scan_skins() -> Array:
@@ -113,6 +118,11 @@ func _ready() -> void:
 	_load_settings()
 	_bullet_mesh = BoxMesh.new()
 	_bullet_mesh.size = Vector3.ONE
+	# Crash fix: never leave a mesh with a null base material (Intel GLES3
+	# null deref). Bullets always set material_override, this is belt only.
+	var _bm := StandardMaterial3D.new()
+	_bm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_bullet_mesh.material = _bm
 	_build_env()
 	arena = ArenaScript.new()
 	add_child(arena)
@@ -126,9 +136,16 @@ func _ready() -> void:
 	arena.build(vfx)
 	_make_fighters()
 	_build_ui()
+	to_menu()
+	# Heavy rendering changes (MSAA framebuffer realloc + shadow atlas
+	# realloc) crash Intel UHD / old Windows drivers when done inside
+	# _ready. Defer until after the first frame so the viewport exists.
+	call_deferred("_apply_startup_rendering")
+
+
+func _apply_startup_rendering() -> void:
 	apply_quality()
 	apply_shadows()
-	to_menu()
 
 
 func _build_env() -> void:
@@ -314,7 +331,11 @@ func _physics_process(dt: float) -> void:
 		_upd_bullets(sd)
 		_upd_clouds(sd)
 		_upd_stuck(sd, state == "play")
-		if String(a.st) != "dash" and String(b.st) != "dash" and String(a.st) != "ko" and String(b.st) != "ko":
+		# Cached state strings: String(st) allocates, and the old code did
+		# it 4x per tick just for the push-apart check.
+		var ast: String = a.st
+		var bst: String = b.st
+		if ast != "dash" and bst != "dash" and ast != "ko" and bst != "ko":
 			var dx: float = b.position.x - a.position.x
 			var dz: float = b.position.z - a.position.z
 			var d: float = Vector2(dx, dz).length()
@@ -363,9 +384,13 @@ func _process(dt: float) -> void:
 		for j in 3:
 			var n: String = CD_ORDER[j]
 			var fl: float = 1.0 - clampf(float(a.cd[n]) / float(a.cd_max[n]), 0.0, 1.0)
-			(cd_l[j] as ColorRect).anchor_right = fl
+			if absf(fl - _last_cd_l[j]) > 0.002:
+				_last_cd_l[j] = fl
+				(cd_l[j] as ColorRect).anchor_right = fl
 			var fr: float = 1.0 - clampf(float(b.cd[n]) / float(b.cd_max[n]), 0.0, 1.0)
-			(cd_r[j] as ColorRect).anchor_left = 1.0 - fr
+			if absf(fr - _last_cd_r[j]) > 0.002:
+				_last_cd_r[j] = fr
+				(cd_r[j] as ColorRect).anchor_left = 1.0 - fr
 	if show_fps:
 		fight_t += dt
 		if fight_t >= 0.5:
@@ -428,37 +453,58 @@ func _bullet_mat(big: bool, bc: Color) -> StandardMaterial3D:
 	return _bullet_mats[key]
 
 
+func _obtain_tracer() -> MeshInstance3D:
+	if _tracer_pool.is_empty():
+		var bx := MeshInstance3D.new()
+		bx.mesh = _bullet_mesh
+		bx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(bx)
+		return bx
+	var bx2 := _tracer_pool.pop_back() as MeshInstance3D
+	bx2.visible = true
+	return bx2
+
+
+func _release_tracer(mi: MeshInstance3D) -> void:
+	mi.visible = false
+	mi.position = Vector3.ZERO
+	if _tracer_pool.size() < 32:
+		_tracer_pool.append(mi)
+	else:
+		mi.queue_free()
+
+
 func fire_bullet(owner: Node3D, mpos: Vector3, dir: Vector3, cfg: Dictionary) -> void:
 	# Ninja kunai are full procedural kunai scenes (same design as the held
 	# props): tip at origin along +Z, aimed along the velocity at spawn and
 	# held straight (tip first, no spin) for the whole flight, then
-	# reparented whole into the victim on impact. Other bullets stay
-	# pooled box tracers.
+	# reparented whole into the victim on impact. Other bullets are pooled
+	# box tracers (shared mesh, cached materials, reused nodes).
 	var mi: Node3D = null
 	var sp: float = float(cfg.get("speed", 22.0))
 	var bc: Color = cfg.get("col", Color(1.0, 0.8, 0.35))
-	if bool(cfg.get("kunai", false)):
+	var is_kunai := bool(cfg.get("kunai", false))
+	if is_kunai:
 		mi = FighterScript.make_kunai_node()
 		mi.scale = Vector3.ONE * FighterScript.NINJA_KUNAI_THROWN_SCALE
 		mi.rotation.y = atan2(dir.x, dir.z)
 		for ch in (mi as Node).get_children():
 			if ch is GeometryInstance3D:
 				(ch as GeometryInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		add_child(mi)
 	else:
-		var bx := MeshInstance3D.new()
+		var bx := _obtain_tracer()
 		bx.mesh = _bullet_mesh
 		bx.scale = Vector3(0.09, 0.09, 0.28 + sp * 0.012)
 		bx.rotation.y = atan2(dir.x, dir.z)
 		bx.material_override = _bullet_mat(bool(cfg.get("big", false)), bc)
-		bx.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		mi = bx
-	add_child(mi)
 	mi.position = mpos
 	bullets.append({"node": mi, "p": mpos, "v": dir.normalized() * sp,
 		"life": float(cfg.get("life", 0.45)), "dmg": float(cfg.get("dmg", 4.0)),
 		"kb": float(cfg.get("kb", 2.5)), "vy": float(cfg.get("vy", 2.0)),
 		"stun": float(cfg.get("stun", 0.18)), "big": bool(cfg.get("big", false)),
-		"kunai": bool(cfg.get("kunai", false)),
+		"kunai": is_kunai,
 		"owner": owner, "col": bc, "trail": 0.0})
 
 
@@ -472,6 +518,8 @@ func _seg_point(a: Vector3, b: Vector3, p: Vector3) -> float:
 
 
 func _upd_bullets(dt: float) -> void:
+	if bullets.is_empty():
+		return
 	for i in range(bullets.size() - 1, -1, -1):
 		var b: Dictionary = bullets[i]
 		b["life"] = float(b["life"]) - dt
@@ -569,6 +617,8 @@ func _stick_kunai(i: int, f) -> void:
 # stuck bombs chain with a short fuse, like the reference.
 func _upd_stuck(dt: float, play: bool) -> void:
 	if not play:
+		return
+	if fighters.size() == 2 and (fighters[0] as Node).get("stuck").is_empty() and (fighters[1] as Node).get("stuck").is_empty():
 		return
 	for f in fighters:
 		if String(f.st) == "ko" or not (f as Node3D).visible:
@@ -685,13 +735,21 @@ func _kill_bullet(i: int, impacted: bool) -> void:
 	var b: Dictionary = bullets[i]
 	if impacted:
 		vfx.burst(b["p"], b["col"], 6, 3.0, 0.07, 0.3)
-	(b["node"] as Node3D).queue_free()
+	var nd := b["node"] as Node3D
+	if bool(b.get("kunai", false)):
+		nd.queue_free()
+	else:
+		_release_tracer(nd as MeshInstance3D)
 	bullets.remove_at(i)
 
 
 func _clear_bullets() -> void:
 	for b in bullets:
-		(b["node"] as Node3D).queue_free()
+		var nd := (b as Dictionary)["node"] as Node3D
+		if bool((b as Dictionary).get("kunai", false)):
+			nd.queue_free()
+		else:
+			_release_tracer(nd as MeshInstance3D)
 	bullets.clear()
 
 
@@ -711,24 +769,29 @@ func deploy_cloud(owner: Node3D, pos: Vector3, radius: float, life: float,
 
 
 func _cloud_bomb() -> MeshInstance3D:
-	# Procedural flying bomb: dark sphere like the held prop.
+	# Procedural flying bomb: dark sphere like the held prop. Mesh +
+	# material shared across all throws (was rebuilt per bomb).
+	if _cloud_mesh == null:
+		_cloud_mesh = SphereMesh.new()
+		_cloud_mesh.radius = 0.17
+		_cloud_mesh.height = 0.34
+	if _cloud_mat == null:
+		_cloud_mat = StandardMaterial3D.new()
+		_cloud_mat.albedo_color = Color(0.10, 0.06, 0.19)
+		_cloud_mat.roughness = 0.5
+		_cloud_mat.emission_enabled = true
+		_cloud_mat.emission = Color(0.33, 0.33, 0.38)
+		_cloud_mat.emission_energy_multiplier = 0.6
 	var bm := MeshInstance3D.new()
-	var sm := SphereMesh.new()
-	sm.radius = 0.17
-	sm.height = 0.34
-	bm.mesh = sm
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(0.10, 0.06, 0.19)
-	m.roughness = 0.5
-	m.emission_enabled = true
-	m.emission = Color(0.33, 0.33, 0.38)
-	m.emission_energy_multiplier = 0.6
-	bm.material_override = m
+	bm.mesh = _cloud_mesh
+	bm.material_override = _cloud_mat
 	bm.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return bm
 
 
 func _upd_clouds(dt: float) -> void:
+	if clouds.is_empty():
+		return
 	for i in range(clouds.size() - 1, -1, -1):
 		var c: Dictionary = clouds[i]
 		var p: Vector3 = c["p"]
@@ -936,7 +999,9 @@ func _build_ui() -> void:
 	var mb: VBoxContainer = screens["menu"]["box"]
 	mb.add_child(_title_label("BLOCK BRAWL", 96))
 	_btn(mb, "Play local 1v1", "play", true)
-	_btn(mb, "Open World", "openworld")
+	_btn(mb, "Open World 1 — Performance Field", "ow1")
+	_btn(mb, "Open World 2 — Nature World", "ow2")
+	_btn(mb, "Grass Render", "grassrender")
 	_btn(mb, "Settings", "set")
 	# select
 	_screen("select")
@@ -1058,10 +1123,13 @@ func _build_hp_bars() -> void:
 		lab.add_theme_constant_override("outline_size", 4)
 		lab.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		root.add_child(lab)
-		hp_bars.append({"root": root, "fill": fill, "lab": lab})
+		hp_bars.append({"root": root, "fill": fill, "lab": lab, "last_hp": -1.0, "last_frac": -1.0})
 
 
 func _upd_hp_bars() -> void:
+	# Position tracks the fighters every frame (cheap), but fill size/color
+	# and label text only rewrite when hp actually changed (avoids per-frame
+	# container relayout + string allocs at 60Hz).
 	for i in fighters.size():
 		var f = fighters[i]
 		var hb: Dictionary = hp_bars[i]
@@ -1075,10 +1143,15 @@ func _upd_hp_bars() -> void:
 			continue
 		root.position = cam.unproject_position(wp) + Vector2(-62, -34)
 		var hp := clampf(float(f.hp), 0.0, 100.0)
+		if absf(hp - float(hb["last_hp"])) < 0.05:
+			continue
+		hb["last_hp"] = hp
 		var frac := hp / 100.0
-		var fill := hb["fill"] as ColorRect
-		fill.size = Vector2(118.0 * frac, 24.0)
-		fill.color = _hp_bar_color(frac)
+		if absf(frac - float(hb["last_frac"])) > 0.001:
+			hb["last_frac"] = frac
+			var fill := hb["fill"] as ColorRect
+			fill.size = Vector2(118.0 * frac, 24.0)
+			fill.color = _hp_bar_color(frac)
 		(hb["lab"] as Label).text = "%d/100" % int(ceil(hp))
 
 
@@ -1179,10 +1252,12 @@ func apply_quality() -> void:
 	# renderer (it has no TAA/FSR). Capped at 2x everywhere: 4x crashes
 	# some Windows drivers and most mobile GPUs when set at startup, and
 	# 2x already removes nearly all edge shimmer on these blocky meshes.
-	if clampi(quality, 0, 2) <= 0:
-		get_viewport().msaa_3d = Viewport.MSAA_DISABLED
-	else:
-		get_viewport().msaa_3d = Viewport.MSAA_2X
+	# NOTE (crash fix): assigning msaa_3d reallocates the framebuffers even
+	# when the value is unchanged, which access-violates Intel UHD + old
+	# Windows GL drivers. Only assign when the value actually differs.
+	var want_msaa := Viewport.MSAA_DISABLED if clampi(quality, 0, 2) <= 0 else Viewport.MSAA_2X
+	if get_viewport().msaa_3d != want_msaa:
+		get_viewport().msaa_3d = want_msaa
 	apply_shadows()
 
 
@@ -1202,13 +1277,16 @@ func apply_shadows() -> void:
 		return
 	sun.shadow_enabled = true
 	var q := clampi(shadow_quality, 0, 3)
-	var atlas: int = [1024, 2048, 4096, 4096][q]
-	# NOTE: 8192 was deliberately not used for Ultra: it risks VRAM
-	# exhaustion / driver OOM on Android and weak iGPUs for zero visible
-	# gain on a 10x10 stylized arena. Ultra instead maxes filtering and
-	# tightens range, which is where the visible sharpness comes from.
-	RenderingServer.directional_shadow_atlas_set_size(atlas, false)
-	ProjectSettings.set_setting("rendering/lights_and_shadows/directional_shadow/size", atlas)
+	# NOTE (crash fix): 4096 risks VRAM exhaustion / driver OOM and an
+	# access-violation inside the GL driver on Intel UHD + Android iGPUs
+	# for zero visible gain on a 10x10 stylized arena. Cap at 2048; Ultra
+	# instead maxes filtering and tightens range, where sharpness comes from.
+	var atlas: int = [1024, 2048, 2048, 2048][q]
+	# NOTE (crash fix): atlas_set_size reallocates the shadow atlas even
+	# when unchanged. Only call when the size actually differs.
+	if int(ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/size", atlas)) != atlas:
+		RenderingServer.directional_shadow_atlas_set_size(atlas, false)
+		ProjectSettings.set_setting("rendering/lights_and_shadows/directional_shadow/size", atlas)
 	# ShadowQuality enum: 0 HARD, 1 SOFT_VERY_LOW, 2 SOFT_LOW,
 	# 3 SOFT_MEDIUM, 4 SOFT_HIGH, 5 SOFT_ULTRA (5 skipped: too costly).
 	RenderingServer.directional_soft_shadow_filter_set_quality(q + 1)
@@ -1350,6 +1428,12 @@ func _on_action(b: Button) -> void:
 		start_match()
 	elif a == "openworld":
 		get_tree().change_scene_to_file("res://openworld/ow_world.tscn")
+	elif a == "ow1":
+		get_tree().change_scene_to_file("res://openworld/ow1_world.tscn")
+	elif a == "ow2":
+		get_tree().change_scene_to_file("res://openworld/ow2_world.tscn")
+	elif a == "grassrender":
+		get_tree().change_scene_to_file("res://grass_render.tscn")
 	elif a == "menu":
 		to_menu()
 	elif a == "resume":

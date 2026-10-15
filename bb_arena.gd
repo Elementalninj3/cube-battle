@@ -19,7 +19,11 @@ func build(p_vfx) -> void:
 	vfx = p_vfx
 	_box = BoxMesh.new()
 	_box.size = Vector3.ONE
-	_box.material = null
+	# Crash fix: null base material derefs in the GLES3 driver on old Intel
+	# iGPUs. Every tile sets material_override, this is belt only.
+	var _fb := StandardMaterial3D.new()
+	_fb.roughness = 0.85
+	_box.material = _fb
 	props.clear()
 	# dirt base, 4 layers
 	for k in 4:

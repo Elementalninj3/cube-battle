@@ -22,6 +22,7 @@ var _pp: Array = []
 var _pi := 0
 const NP := 100
 var dt_scale := 1.0
+var _any_live := false
 
 
 func _ready() -> void:
@@ -32,16 +33,20 @@ func _ready() -> void:
 	_slash_n_mesh = _sector(0.9, 2.35, 2.2)
 	_cube_mesh = BoxMesh.new()
 	_cube_mesh.size = Vector3(1, 1, 1)
+	_cube_mesh.material = _fallback_mat()
 	_flash_mesh = SphereMesh.new()
 	_flash_mesh.radius = 1.0
 	_flash_mesh.height = 2.0
+	_flash_mesh.material = _fallback_mat()
 	_streak_mesh = BoxMesh.new()
 	_streak_mesh.size = Vector3(1, 1, 1)
+	_streak_mesh.material = _fallback_mat()
 	_mm = MultiMesh.new()
 	_mm.transform_format = MultiMesh.TRANSFORM_3D
 	_mm.use_colors = true
 	var pm := BoxMesh.new()
 	pm.size = Vector3(1, 1, 1)
+	pm.material = _fallback_mat()
 	_mm.mesh = pm
 	_mm.instance_count = NP
 	_mmi = MultiMeshInstance3D.new()
@@ -57,6 +62,16 @@ func _ready() -> void:
 		_pp.append({"p": Vector3.ZERO, "v": Vector3.ZERO, "life": 0.0, "max": 1.0, "s": 0.1, "gr": 10.0})
 		_mm.set_instance_transform(i, zero)
 		_mm.set_instance_color(i, Color.WHITE)
+
+
+func _fallback_mat() -> StandardMaterial3D:
+	# Crash fix: no procedural mesh may carry a null base material. GLES3
+	# queries the mesh material even when material_override is set, and a
+	# null deref there access-violates old Intel Windows drivers.
+	var m := StandardMaterial3D.new()
+	m.vertex_color_use_as_albedo = true
+	m.roughness = 0.9
+	return m
 
 
 func set_cap(n: int) -> void:
@@ -153,7 +168,15 @@ func scorch(pos: Vector3, dur: float = 3.0, r: float = 1.0) -> void:
 
 # Temporary point light pop (HTML PointLight 0xff9a4d energy 3 range 12,
 # life 0.25). Compatibility renderer supports a few omni lights fine.
+# Capped at 2 concurrent pops: each extra omni re-renders every lit pixel,
+# and detonations already read well from flash + ring + sparks alone.
+var _active_lights := 0
+
+
 func light_pop(pos: Vector3, col: Color, energy: float, dur: float = 0.25) -> void:
+	if _active_lights >= 2:
+		return
+	_active_lights += 1
 	var l := OmniLight3D.new()
 	l.light_color = col
 	l.light_energy = energy
@@ -182,6 +205,7 @@ func emit(pos: Vector3, vel: Vector3, col: Color, s: float, life: float, gr: flo
 	q["max"] = life
 	q["gr"] = gr
 	_mm.set_instance_color(i, col)
+	_any_live = true
 
 
 func burst(pos: Vector3, col: Color, n: int, sp: float, s: float, life: float, up: float = 1.0, gr: float = 10.0) -> void:
@@ -196,12 +220,18 @@ func clear_all() -> void:
 	for x in _fx:
 		_rel(x)
 	_fx.clear()
+	_active_lights = 0
+	_any_live = false
 	for i in NP:
 		(_pp[i] as Dictionary)["life"] = 0.0
 		_mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ZERO), Vector3.ZERO))
 
 
 func _process(dt: float) -> void:
+	# Idle fast path: no active mesh FX and no live particles. Skips the
+	# 100-slot particle scan every frame when nothing is playing.
+	if _fx.is_empty() and not _any_live:
+		return
 	var sd := dt * dt_scale
 	for i in range(_fx.size() - 1, -1, -1):
 		var x: Dictionary = _fx[i]
@@ -308,8 +338,7 @@ func _process(dt: float) -> void:
 			q["p"] = p
 			var s2: float = float(q["s"]) * float(q["life"]) / float(q["max"])
 			_mm.set_instance_transform(i, Transform3D(Basis.from_scale(Vector3.ONE * s2), p))
-	if any:
-		pass # transforms write straight into the multimesh
+	_any_live = any or not _fx.is_empty()
 
 
 func _grab(key: String, mesh: Mesh, col: Color, additive: bool) -> MeshInstance3D:
@@ -340,6 +369,7 @@ func _grab(key: String, mesh: Mesh, col: Color, additive: bool) -> MeshInstance3
 func _rel(x: Dictionary) -> void:
 	if String(x["kind"]) == "light":
 		(x["m"] as Node).queue_free()
+		_active_lights = maxi(0, _active_lights - 1)
 		return
 	if String(x["kind"]) == "popup":
 		(x["m"] as Node).queue_free()
@@ -414,6 +444,8 @@ func _sector(r0: float, r1: float, arc: float) -> ArrayMesh:
 func _mesh(verts: PackedVector3Array, normals: PackedVector3Array, idx: PackedInt32Array) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Crash fix: ArrayMesh surfaces must not carry null material (Intel GLES3).
+	st.set_material(_fallback_mat())
 	for i in verts.size():
 		st.set_normal(normals[i])
 		st.add_vertex(verts[i])

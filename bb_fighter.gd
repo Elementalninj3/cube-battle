@@ -188,11 +188,16 @@ var arm_r: Node3D
 var hat_root: Node3D
 var mats: Array = []
 var _box: BoxMesh
+var _flash_on := false # tracks whether the hit-flash emission is applied
 
 
 func _ready() -> void:
 	_box = BoxMesh.new()
 	_box.size = Vector3.ONE
+	# Crash fix: null base material derefs in GLES3 on old Intel drivers.
+	var _fb := StandardMaterial3D.new()
+	_fb.roughness = 0.55
+	_box.material = _fb
 	model = Node3D.new()
 	add_child(model)
 	arm_l = Node3D.new()
@@ -285,6 +290,7 @@ func reset_match(pos: Vector3, p_ang: float) -> void:
 	for key in cd:
 		cd[key] = 0.0
 	visible = true
+	_flash_on = false
 	rotation.y = ang
 
 
@@ -432,6 +438,17 @@ func _build_skin() -> bool:
 				dup.emission = Color(0.05, 0.05, 0.05)
 				mi.set_surface_override_material(s, dup)
 				mats.append(dup)
+			elif sm == null:
+				# Crash fix: GLB surfaces with null material deref in the
+				# GLES3 shadow pass on old Intel drivers. Give them a solid
+				# fallback in the body color so they render instead of crash.
+				var fb := StandardMaterial3D.new()
+				fb.albedo_color = body_col
+				fb.roughness = 0.55
+				fb.emission_enabled = true
+				fb.emission = Color(0.05, 0.05, 0.05)
+				mi.set_surface_override_material(s, fb)
+				mats.append(fb)
 	var acc := [true, AABB()]
 	_skin_aabb(inst, Transform3D.IDENTITY, acc)
 	var box_all := acc[1] as AABB
@@ -446,13 +463,36 @@ func _build_skin() -> bool:
 	return true
 
 
+static var _prop_fallback: StandardMaterial3D = null
+
+
 func _prop_instance(pname: String) -> Node3D:
 	if not _prop_scenes.has(pname):
 		var packed := load(PROPS_DIR + "/" + pname + ".glb") as PackedScene
 		if packed == null:
 			return null
 		_prop_scenes[pname] = packed
-	return (_prop_scenes[pname] as PackedScene).instantiate() as Node3D
+	var inst := (_prop_scenes[pname] as PackedScene).instantiate() as Node3D
+	_sweep_prop_materials(inst)
+	return inst
+
+
+func _sweep_prop_materials(n: Node) -> void:
+	# Crash fix: prop GLBs may carry null-material surfaces, which deref in
+	# the GLES3 shadow pass on old Intel drivers. Patch per-instance
+	# overrides (shared mesh resources stay untouched).
+	if n is MeshInstance3D:
+		var mi := n as MeshInstance3D
+		if mi.mesh != null:
+			for s in mi.mesh.get_surface_count():
+				if mi.mesh.surface_get_material(s) == null and mi.get_surface_override_material(s) == null:
+					if _prop_fallback == null:
+						_prop_fallback = StandardMaterial3D.new()
+						_prop_fallback.albedo_color = Color(0.45, 0.42, 0.4)
+						_prop_fallback.roughness = 0.6
+					mi.set_surface_override_material(s, _prop_fallback)
+	for c in n.get_children():
+		_sweep_prop_materials(c)
 
 
 func _gear_wrap(pname: String, parent: Node3D, pos: Vector3, scl: float, tip_z: float) -> Node3D:
@@ -1777,6 +1817,12 @@ func _sweep_check() -> void:
 
 func strike() -> void:
 	var tk := ""
+	if foe == null:
+		# No foe (open-world roam): swing whiffs through the air, no target.
+		game.vfx.slash(position, ang, bool(atk["big"]), body_col)
+		v += face * float(atk["lunge"])
+		game.damage_props(position, float(atk["range"]) + 0.6, float(atk["dmg"]))
+		return
 	if foe.atk != null:
 		tk = String(foe.atk["kind"])
 	if String(foe.st) == "atk" and tk == "counter" and foe.counter_open():
@@ -2192,11 +2238,17 @@ func anim(dt: float, tnow: float) -> void:
 	if horse_root != null:
 		horse_root.visible = st == "ride"
 	rotation.y = ang
-	var e4 := 0.8 if flash > 0.0 else 0.05
+	# Hit-flash emission: only touch shared skin materials on transitions.
+	# The old code rewrote every material's emission every frame for every
+	# fighter, even at rest.
+	var want_flash := flash > 0.0
 	if stuck.is_empty():
 		_restore_armed_mats()
-		for m in mats:
-			(m as StandardMaterial3D).emission = Color(e4, e4, e4)
+		if want_flash != _flash_on:
+			_flash_on = want_flash
+			var e4 := 0.8 if want_flash else 0.05
+			for m in mats:
+				(m as StandardMaterial3D).emission = Color(e4, e4, e4)
 	else:
 		# Armed fuse blink (html/ninjasetup.html): body albedo pulses
 		# toward hot red with accelerating frequency as the fuse runs down,

@@ -29,6 +29,7 @@ func _ready() -> void:
 	streams["beep_hi"] = _tone(900.0, 900.0, 0.15, 1, 0.15)
 	streams["ko"] = _mix(_tone(300.0, 50.0, 0.5, 2, 0.3), _noise(0.4, 0.4, 1200.0, 200.0))
 	streams["win"] = _melody([523.0, 659.0, 784.0, 1046.0], 0.11, 0.25)
+	streams["coin"] = _melody([988.0, 1319.0], 0.07, 0.18)
 
 
 func play(sname: String) -> void:
