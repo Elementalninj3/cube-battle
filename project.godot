@@ -19,6 +19,7 @@ config/icon="res://icon.svg"
 
 [autoload]
 
+AdaptiveRes="*res://core/cb_adaptive_res.gd"
 MCPRuntimeBridge="*res://addons/godot_mcp/services/mcp_runtime_bridge.gd"
 MCPInputBridge="*res://addons/godot_mcp/services/mcp_input_bridge.gd"
 MCPScreenshotBridge="*res://addons/godot_mcp/services/mcp_screenshot_bridge.gd"

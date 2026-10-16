@@ -9,8 +9,12 @@ const VfxScript = preload("res://bb_vfx.gd")
 const AudioScript = preload("res://bb_audio.gd")
 const DebugScript = preload("res://bb_debug.gd")
 const AIScript = preload("res://bb_ai.gd")
+const SoloState = preload("res://solo_state.gd")
+const CBLightingScript = preload("res://core/cb_lighting.gd")
+const CBPerfScript = preload("res://core/cb_perf.gd")
 
 const SETTINGS_PATH := "user://cubebox_settings.cfg"
+const KNOWN_SKINS := ["cubecowboy", "cubeknight", "ninja"]
 const DIFF_NAMES := ["Easy", "Normal", "Hard", "Expert"]
 const SHADOW_NAMES := ["Low", "Medium", "High", "Ultra"]
 
@@ -29,6 +33,12 @@ var shake_amt := 0.6
 var quality := 2
 var show_fps := true
 var show_hitboxes := false
+var adaptive_res := false
+var adaptive_target := 60.0
+var adaptive_min := 0.50
+var lighting_profile := -1 # -1 = Auto (mode default); 0..4 = global override
+var _light_env: Environment = null
+var _light_sky: ProceduralSkyMaterial = null
 
 var fighters: Array = []
 var vfx = null
@@ -58,6 +68,10 @@ const CD_COLS := [Color(1.0, 0.85, 0.2), Color(1.0, 0.5, 0.15), Color(0.75, 0.4,
 const CD_ORDER := ["S1", "S2", "S3"]
 var cd: Label
 var fps: Label
+var solo_target := ""
+var solo_skin := 0
+var solo_panel: VBoxContainer
+var solo_sub: Label
 var screens := {}
 var sel_panels := []
 var win_label: Label
@@ -78,10 +92,17 @@ func _scan_skins() -> Array:
 	if d != null:
 		for f in d.get_files():
 			if f.ends_with(".glb") or f.ends_with(".gltf") or f.ends_with(".tscn"):
-				out.append(f.get_basename())
+				var b := f.get_basename()
+				if not out.has(b):
+					out.append(b)
+	# Built-in roster: always selectable. Exported builds (e.g. the Android
+	# APK) pack res://, so runtime directory listing returns nothing there
+	# and the old empty-list fallback left cowboy as the only pick on phone.
+	# Models themselves load by direct path, which works fine in exports.
+	for s in KNOWN_SKINS:
+		if not out.has(s):
+			out.append(s)
 	out.sort()
-	if out.is_empty():
-		out.append("cubecowboy")
 	return out
 
 
@@ -149,37 +170,27 @@ func _apply_startup_rendering() -> void:
 
 
 func _build_env() -> void:
-	var we := WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_SKY
-	var sky := Sky.new()
-	var psm := ProceduralSkyMaterial.new()
-	psm.sky_top_color = Color(0.95, 0.75, 0.58)
-	psm.sky_horizon_color = Color(1.0, 0.91, 0.82)
-	psm.ground_bottom_color = Color(0.29, 0.45, 0.22)
-	psm.ground_horizon_color = Color(0.85, 0.76, 0.66)
-	sky.sky_material = psm
-	env.sky = sky
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.set("tone_mapper", 3) # ACES
-	env.set("fog_enabled", true)
-	env.set("fog_light_color", Color(0.95, 0.86, 0.75))
-	env.set("fog_depth_begin", 50.0)
-	env.set("fog_depth_end", 100.0)
-	we.environment = env
-	add_child(we)
-	sun = DirectionalLight3D.new()
-	sun.light_color = Color(1.0, 0.94, 0.82)
-	sun.light_energy = 1.35
-	sun.shadow_enabled = true
-	sun.rotation = Vector3(-0.9, 0.6, 0)
-	add_child(sun)
-	var rim := DirectionalLight3D.new()
-	rim.light_color = Color(0.62, 0.82, 1.0)
-	rim.light_energy = 0.45
-	rim.shadow_enabled = false
-	rim.rotation = Vector3(-0.4, -2.4, 0)
-	add_child(rim)
+	# Cozy lighting rig: one sun + sky ambient + restrained fog. The profile
+	# is the global Settings choice, or this mode's default when on Auto.
+	CBPerfScript.preload_shaders()
+	var profile := int(CBLightingScript.MODE_DEFAULT_PROFILE.get(
+		CBLightingScript.Mode.LOCAL_1V1, CBLightingScript.Profile.COZY_DAYLIGHT))
+	var c := ConfigFile.new()
+	if c.load(SETTINGS_PATH) == OK:
+		profile = CBLightingScript.profile_from_config(c, CBLightingScript.Mode.LOCAL_1V1)
+	var rig: Dictionary = CBLightingScript.build(self, profile)
+	if rig.is_empty() or not (rig.get("sun") is DirectionalLight3D):
+		# Lighting rig failed — boot a fallback camera so the game never
+		# runs cam-less (that spams _cam_upd errors every frame).
+		cam = Camera3D.new()
+		cam.fov = 28.0
+		add_child(cam)
+		cam.current = true
+		cam.position = cp
+		return
+	_light_env = rig["env"] as Environment
+	sun = rig["sun"] as DirectionalLight3D
+	_light_sky = rig["sky_mat"] as ProceduralSkyMaterial
 	cam = Camera3D.new()
 	cam.fov = 28.0
 	add_child(cam)
@@ -200,12 +211,13 @@ func _make_fighters() -> void:
 	# Ninja mapping: J = light attack (L slot / katana string),
 	# K = heavy attack (H slot), L = kunai throw (S2), P = smoke bomb (S3).
 	# S1 sits on O so every slot stays reachable with no duplicate keys.
+	# Space = jump only, Shift = dash only (no shared binds).
 	fighters[0].keys = {"up": [KEY_W], "down": [KEY_S], "left": [KEY_A], "right": [KEY_D],
-		"L": [KEY_J], "H": [KEY_K], "D": [KEY_SPACE],
-		"S1": [KEY_O], "S2": [KEY_L], "S3": [KEY_P]}
+		"L": [KEY_J], "H": [KEY_K], "D": [KEY_SHIFT],
+		"S1": [KEY_O], "S2": [KEY_L], "S3": [KEY_P], "JUMP": [KEY_SPACE]}
 	fighters[1].keys = {"up": [KEY_UP], "down": [KEY_DOWN], "left": [KEY_LEFT], "right": [KEY_RIGHT],
 		"L": [KEY_KP_1, KEY_COMMA], "H": [KEY_KP_2, KEY_PERIOD], "D": [KEY_SHIFT, KEY_SLASH],
-		"S1": [KEY_KP_3], "S2": [KEY_KP_4], "S3": [KEY_KP_5]}
+		"S1": [KEY_KP_3], "S2": [KEY_KP_4], "S3": [KEY_KP_5], "JUMP": [KEY_KP_0]}
 	if ai == null:
 		ai = AIScript.new()
 		add_child(ai)
@@ -236,6 +248,10 @@ func _setup_fighters() -> void:
 func start_match() -> void:
 	_setup_fighters()
 	_apply_cpu_flag()
+	if fighters.size() > 0:
+		fighters[0].ai_enabled = false
+		fighters[0].ai_ix = 0.0
+		fighters[0].ai_iy = 0.0
 	fighters[0].reset_match(Vector3(-2.0, 0, 2.0), atan2(4.0, -4.0))
 	fighters[1].reset_match(Vector3(2.0, 0, -2.0), atan2(-4.0, 4.0))
 	vfx.clear_all()
@@ -374,10 +390,16 @@ func _physics_process(dt: float) -> void:
 			f.anim(dt, now)
 
 
+var _lod_t := 0.0
+var _prof_t := 0.0
+
+
 func _process(dt: float) -> void:
 	_cam_upd(dt)
 	_upd_hp_bars()
 	_upd_debug()
+	_update_arena_lod(dt)
+	_update_profiler(dt)
 	if fighters.size() == 2:
 		var a = fighters[0]
 		var b = fighters[1]
@@ -399,6 +421,8 @@ func _process(dt: float) -> void:
 
 
 func _cam_upd(dt: float) -> void:
+	if cam == null:
+		return
 	var in_fight := state == "play" or state == "count" or state == "ko" or state == "pause" or state == "over"
 	var tg := Vector3(0, 0.5, 0)
 	var D := 30.0
@@ -429,6 +453,23 @@ func _cam_upd(dt: float) -> void:
 		cam.position.y += randf_range(-0.5, 0.5) * shake
 		shake = maxf(0.0, shake - dt * 1.2)
 	cam.look_at(look)
+
+
+func _update_arena_lod(dt: float) -> void:
+	_lod_t += dt
+	if _lod_t < 0.25:
+		return
+	_lod_t = 0.0
+	if arena != null and is_instance_valid(arena) and arena.has_method("update_lod") and cam != null:
+		arena.update_lod(cam.global_position)
+
+
+func _update_profiler(dt: float) -> void:
+	_prof_t += dt
+	if _prof_t < 15.0:
+		return
+	_prof_t = 0.0
+	CBPerfScript.snapshot("1v1_tick")
 
 
 # ---------- PROJECTILES ----------
@@ -999,8 +1040,8 @@ func _build_ui() -> void:
 	var mb: VBoxContainer = screens["menu"]["box"]
 	mb.add_child(_title_label("BLOCK BRAWL", 96))
 	_btn(mb, "Play local 1v1", "play", true)
-	_btn(mb, "Open World 1 — Performance Field", "ow1")
-	_btn(mb, "Open World 2 — Nature World", "ow2")
+	_btn(mb, "Open World 1 — Big 1v1 Arena", "owbig")
+	_btn(mb, "Open World 2 — Grassy Arena", "owgrass")
 	_btn(mb, "Grass Render", "grassrender")
 	_btn(mb, "Settings", "set")
 	# select
@@ -1023,12 +1064,29 @@ func _build_ui() -> void:
 	_btn(row2, "Start match", "start", true)
 	_btn(row2, "Back", "menu")
 	var hint := Label.new()
-	hint.text = "P1: WASD move, J light, K heavy, L kunai/special-2, O special-1, P smoke/special-3, Space dash. P2: arrows, ,/. attacks, Numpad3/4/5 specials, Shift or / dash. Esc pauses. Cooldowns: yellow=O, orange=L, purple=P. Ninja kit: J katana string, K heavy, L kunai throw, P smoke bomb. Cowboy kit: O fan-fire (6 shots), L rifle (heavy), P horse ride. Knight kit: O shield counter, L shield bash, P sword sweep."
+	hint.text = "P1: WASD move, J light, K heavy, L kunai/special-2, O special-1, P smoke/special-3, Space jump, Shift dash. P2: arrows, ,/. attacks, Numpad3/4/5 specials, Shift or / dash, Numpad0 jump. Esc pauses. Cooldowns: yellow=O, orange=L, purple=P. Ninja kit: J katana string, K heavy, L kunai throw, P smoke bomb. Cowboy kit: O fan-fire (6 shots), L rifle (heavy), P horse ride. Knight kit: O shield counter, L shield bash, P sword sweep."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.custom_minimum_size = Vector2(560, 0)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 14)
 	sb2.add_child(hint)
+	# select_solo (1v1-style character pick for the solo modes:
+	# open-world arenas, grass render)
+	_screen("select_solo")
+	var ssb: VBoxContainer = screens["select_solo"]["box"]
+	ssb.add_child(_title_label("CHOOSE FIGHTER", 48))
+	solo_sub = Label.new()
+	solo_sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	solo_sub.add_theme_font_size_override("font_size", 20)
+	ssb.add_child(solo_sub)
+	solo_panel = _panel()
+	ssb.add_child(solo_panel)
+	var srow := HBoxContainer.new()
+	srow.alignment = BoxContainer.ALIGNMENT_CENTER
+	srow.add_theme_constant_override("separation", 12)
+	ssb.add_child(srow)
+	_btn(srow, "Start", "solo_start", true)
+	_btn(srow, "Back", "menu")
 	# pause
 	_screen("pause")
 	var pb: VBoxContainer = screens["pause"]["box"]
@@ -1059,6 +1117,7 @@ func _build_ui() -> void:
 	ss.value_changed.connect(func(_v: float) -> void: shake_amt = ss.value / 100.0; _save_settings())
 	_opt(grid)
 	_shadow_opt(grid)
+	_light_type_section(grid)
 	var sf := CheckBox.new()
 	sf.text = "Show FPS"
 	sf.button_pressed = show_fps
@@ -1083,6 +1142,36 @@ func _build_ui() -> void:
 	_fs_box.text = "Fullscreen"
 	grid.add_child(_fs_box)
 	_fs_box.toggled.connect(func(on: bool) -> void: _set_fullscreen(on))
+	var ar_lab := Label.new()
+	ar_lab.text = "Adaptive resolution"
+	grid.add_child(ar_lab)
+	_adaptive_box = CheckBox.new()
+	_adaptive_box.text = "Adaptive res (60 FPS)"
+	_adaptive_box.button_pressed = adaptive_res
+	grid.add_child(_adaptive_box)
+	_adaptive_box.toggled.connect(func(on: bool) -> void: adaptive_res = on; _apply_adaptive(); _save_settings())
+	var at := HSlider.new()
+	at.min_value = 30
+	at.max_value = 120
+	at.step = 1
+	at.value = adaptive_target
+	at.custom_minimum_size = Vector2(160, 0)
+	var at_lab := Label.new()
+	at_lab.text = "Adaptive target FPS"
+	grid.add_child(at_lab)
+	grid.add_child(at)
+	at.value_changed.connect(func(v: float) -> void: adaptive_target = v; _apply_adaptive(); _save_settings())
+	var am := HSlider.new()
+	am.min_value = 50
+	am.max_value = 100
+	am.step = 1
+	am.value = adaptive_min * 100.0
+	am.custom_minimum_size = Vector2(160, 0)
+	var am_lab := Label.new()
+	am_lab.text = "Adaptive min scale %"
+	grid.add_child(am_lab)
+	grid.add_child(am)
+	am.value_changed.connect(func(v: float) -> void: adaptive_min = v / 100.0; _apply_adaptive(); _save_settings())
 	_btn(stb, "Back", "back", true)
 
 
@@ -1157,6 +1246,21 @@ func _upd_hp_bars() -> void:
 
 var _hitbox_box: CheckBox = null
 var _fs_box: CheckBox = null
+var _adaptive_box: CheckBox = null
+
+
+func _apply_adaptive() -> void:
+	# The AdaptiveRes autoload owns 3D resolution scaling (60 FPS guarantee),
+	# and keeps UI sharp (it scales 3D only). Quality sets its ceiling.
+	var ar := get_node_or_null("/root/AdaptiveRes")
+	if ar == null:
+		return
+	ar.enabled = adaptive_res
+	ar.target_fps = adaptive_target
+	ar.min_scale = adaptive_min
+	ar.set_base_scale([0.85, 1.0, 1.0][clampi(quality, 0, 2)])
+	if _adaptive_box != null and is_instance_valid(_adaptive_box):
+		_adaptive_box.set_pressed_no_signal(adaptive_res)
 
 
 func _upd_debug() -> void:
@@ -1244,10 +1348,51 @@ func _shadow_opt(grid: GridContainer) -> void:
 	o.item_selected.connect(_on_shadow_selected)
 
 
+# One "Lighting Profile" dropdown: Auto (the mode's own default) plus the
+# five cozy environments. Replaces the old Type+Mode (Baked/Sunset/
+# Atmospheric) controls; the choice is global and shared by every mode.
+func _light_type_section(grid: GridContainer) -> void:
+	var l := Label.new()
+	l.text = "Lighting Profile"
+	grid.add_child(l)
+	var o := OptionButton.new()
+	o.tooltip_text = "Auto uses this mode's default environment."
+	o.add_item("Auto (mode default)", -1)
+	for pi in CBLightingScript.PROFILE_NAMES.size():
+		o.add_item(CBLightingScript.PROFILE_NAMES[pi], pi)
+	var want := clampi(lighting_profile, -1, CBLightingScript.PROFILE_NAMES.size() - 1)
+	for i in o.item_count:
+		if o.get_item_id(i) == want:
+			o.selected = i
+			break
+	grid.add_child(o)
+	o.item_selected.connect(_on_lighting_profile_selected)
+
+
+func _on_lighting_profile_selected(pos: int) -> void:
+	# Item 0 is Auto (-1); items 1..n are profiles 0..n-1.
+	lighting_profile = clampi(pos - 1, -1, CBLightingScript.PROFILE_NAMES.size() - 1)
+	_apply_lighting()
+	_save_settings()
+
+
+# Reapplies the active profile. All profile values are absolute, so
+# re-selecting never compounds.
+func _apply_lighting() -> void:
+	if _light_env == null or sun == null or _light_sky == null:
+		return
+	var profile := lighting_profile
+	if profile < 0:
+		profile = int(CBLightingScript.MODE_DEFAULT_PROFILE.get(
+			CBLightingScript.Mode.LOCAL_1V1, CBLightingScript.Profile.COZY_DAYLIGHT))
+	CBLightingScript.apply({"env": _light_env, "sun": sun, "sky_mat": _light_sky}, profile)
+
+
 func apply_quality() -> void:
 	vfx.set_cap([60, 100, 100][clampi(quality, 0, 2)])
-	var sc: float = [0.85, 1.0, 1.0][clampi(quality, 0, 2)]
-	get_viewport().set("scaling_3d_scale", sc)
+	# 3D resolution scaling is owned by the AdaptiveRes autoload (60 FPS
+	# guarantee); quality only sets its ceiling. UI is unaffected.
+	_apply_adaptive()
 	# MSAA is the biggest fix for jagged block edges in the Compatibility
 	# renderer (it has no TAA/FSR). Capped at 2x everywhere: 4x crashes
 	# some Windows drivers and most mobile GPUs when set at startup, and
@@ -1312,9 +1457,16 @@ func _save_settings() -> void:
 	var c := ConfigFile.new()
 	c.set_value("game", "quality", quality)
 	c.set_value("game", "shadow_quality", shadow_quality)
+	c.set_value("game", "lighting_profile", lighting_profile)
+	# Drop the obsolete Type/Mode keys so the old system can't come back.
+	for k in ["light_preset", "light_dir", "light_baked", "light_atmos"]:
+		c.erase_section_key("game", k)
 	c.set_value("game", "volume", audio.vol if audio != null else _loaded_vol)
 	c.set_value("game", "shake", shake_amt)
 	c.set_value("game", "show_fps", show_fps)
+	c.set_value("game", "adaptive_res", adaptive_res)
+	c.set_value("game", "adaptive_target", adaptive_target)
+	c.set_value("game", "adaptive_min", adaptive_min)
 	c.set_value("game", "p2_cpu", bool(cfg[1].get("cpu", false)))
 	c.set_value("game", "p2_diff", int(cfg[1].get("diff", 1)))
 	c.save(SETTINGS_PATH)
@@ -1326,9 +1478,22 @@ func _load_settings() -> void:
 		return
 	quality = clampi(int(c.get_value("game", "quality", quality)), 0, 2)
 	shadow_quality = clampi(int(c.get_value("game", "shadow_quality", 1)), 0, 3)
+	# Lighting: the new single profile choice. If absent, migrate the old
+	# Type/Mode preset once (nearest new profile); Auto (-1) otherwise.
+	if c.has_section_key("game", "lighting_profile"):
+		lighting_profile = clampi(int(c.get_value("game", "lighting_profile", -1)), -1, 4)
+	elif c.has_section_key("game", "light_preset"):
+		lighting_profile = int(CBLightingScript.LEGACY_PRESET_TO_PROFILE.get(
+			clampi(int(c.get_value("game", "light_preset", 0)), 0, 4),
+			CBLightingScript.Profile.COZY_DAYLIGHT))
+	else:
+		lighting_profile = -1
 	_loaded_vol = clampf(float(c.get_value("game", "volume", 0.6)), 0.0, 1.0)
 	shake_amt = clampf(float(c.get_value("game", "shake", 0.6)), 0.0, 1.0)
 	show_fps = bool(c.get_value("game", "show_fps", true))
+	adaptive_res = bool(c.get_value("game", "adaptive_res", false))
+	adaptive_target = clampf(float(c.get_value("game", "adaptive_target", 60.0)), 30.0, 120.0)
+	adaptive_min = clampf(float(c.get_value("game", "adaptive_min", 0.50)), 0.5, 1.0)
 	cfg[1]["cpu"] = bool(c.get_value("game", "p2_cpu", true))
 	cfg[1]["diff"] = clampi(int(c.get_value("game", "p2_diff", 1)), 0, DIFF_NAMES.size() - 1)
 
@@ -1343,6 +1508,10 @@ func to_menu() -> void:
 	state = "menu"
 	_clear_bullets()
 	_clear_clouds()
+	if fighters.size() > 0:
+		fighters[0].ai_enabled = false
+		fighters[0].ai_ix = 0.0
+		fighters[0].ai_iy = 0.0
 	_pv()
 	if ai != null:
 		ai.reset_ai()
@@ -1404,6 +1573,63 @@ func rs() -> void:
 			vb.add_child(b)
 
 
+func _solo_target_name() -> String:
+	match solo_target:
+		"owbig":
+			return "Open World 1 — Big 1v1 Arena"
+		"owgrass":
+			return "Open World 2 — Grassy Arena"
+		"grassrender":
+			return "Grass Render"
+		_:
+			return "Solo Mode"
+
+
+func _solo_scene() -> String:
+	match solo_target:
+		"owbig":
+			return "res://openworld/ow_open_big.tscn"
+		"owgrass":
+			return "res://openworld/ow_open_grass.tscn"
+		"grassrender":
+			return "res://grass_render.tscn"
+		_:
+			return ""
+
+
+func _open_solo_select(target: String) -> void:
+	solo_target = target
+	solo_skin = clampi(solo_skin, 0, maxi(0, SKINS.size() - 1))
+	state = "select_solo"
+	rs_solo()
+	_pv()
+	show_screen("select_solo")
+
+
+func rs_solo() -> void:
+	for ch in solo_panel.get_children():
+		ch.queue_free()
+	solo_sub.text = _solo_target_name()
+	for j in SKINS.size():
+		var sname := str(SKINS[j])
+		var b := Button.new()
+		b.text = _skin_pretty(sname)
+		b.custom_minimum_size = Vector2(180, 40)
+		var sb := _style(_skin_col(sname), 8)
+		if solo_skin == j:
+			sb.border_width_left = 3
+			sb.border_width_right = 3
+			sb.border_width_top = 3
+			sb.border_width_bottom = 3
+			sb.border_color = Color.WHITE
+		b.add_theme_stylebox_override("normal", sb)
+		b.set_meta("action", "soloskin")
+		b.set_meta("i", 0)
+		b.set_meta("v", str(j))
+		b.pressed.connect(_on_action.bind(b))
+		solo_panel.add_child(b)
+
+
 func _on_action(b: Button) -> void:
 	var a := String(b.get_meta("action"))
 	var i := int(b.get_meta("i"))
@@ -1426,14 +1652,16 @@ func _on_action(b: Button) -> void:
 		rs()
 	elif a == "start" or a == "restart":
 		start_match()
-	elif a == "openworld":
-		get_tree().change_scene_to_file("res://openworld/ow_world.tscn")
-	elif a == "ow1":
-		get_tree().change_scene_to_file("res://openworld/ow1_world.tscn")
-	elif a == "ow2":
-		get_tree().change_scene_to_file("res://openworld/ow2_world.tscn")
-	elif a == "grassrender":
-		get_tree().change_scene_to_file("res://grass_render.tscn")
+	elif a == "soloskin":
+		solo_skin = int(b.get_meta("v")) % SKINS.size()
+		rs_solo()
+	elif a == "solo_start":
+		SoloState.set_skin(str(SKINS[clampi(solo_skin, 0, SKINS.size() - 1)]))
+		var sc := _solo_scene()
+		if sc != "":
+			get_tree().change_scene_to_file(sc)
+	elif a == "owbig" or a == "owgrass" or a == "grassrender":
+		_open_solo_select(a)
 	elif a == "menu":
 		to_menu()
 	elif a == "resume":

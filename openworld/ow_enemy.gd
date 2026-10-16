@@ -41,7 +41,7 @@ func setup(p_world, skin: String, camp_pos: Vector3, hp: float) -> void:
 	body.ai_enabled = true
 	add_child(body)
 	body.setup_skin(skin)
-	body.bounds = 31.0
+	body.bounds = float(world.bounds_val)
 	body.reset_match(camp + Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)), randf() * TAU)
 	body.hp = max_hp
 	patrol_target = body.position

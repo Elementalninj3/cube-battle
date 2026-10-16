@@ -14,6 +14,9 @@ extends RefCounted
 ##
 ## Returned dict: {obstacles, spawn, camps, grass_count}
 
+const CBLayers = preload("res://core/cb_layers.gd")
+const CBPerf = preload("res://core/cb_perf.gd")
+
 const GRASS_DIR := "res://free assets/grassshader/assets/BinbunGrass/src/"
 
 const HALF := 20.0 # playable half-extent (fighters clamp to 19)
@@ -33,6 +36,12 @@ const PALETTE := [Color(0.658824, 0.792157, 0.345098),
 static var _noise_cached: NoiseTexture2D = null
 static var _grad_cached: GradientTexture2D = null
 static var _wind_cached: NoiseTexture2D = null
+# Shared production materials: every grass/ground field uses identical
+# parameters, so one ShaderMaterial each avoids repeat compiles and keeps
+# texture binds shared. (No per-mode mutation happens after creation, so
+# sharing is safe across Grass Render / OW2 / OW3.)
+static var _grass_mat: ShaderMaterial = null
+static var _ground_mat: ShaderMaterial = null
 
 
 static func _noise_tex(seed: int, freq: float, size: int = 256) -> NoiseTexture2D:
@@ -81,10 +90,13 @@ static func _wind_tex() -> NoiseTexture2D:
 
 # The downloaded Binbun ground.gdshader, demo (grass_ground_01.tres) setup.
 static func make_ground_material() -> ShaderMaterial:
+	if _ground_mat != null and is_instance_valid(_ground_mat):
+		return _ground_mat
 	var m := ShaderMaterial.new()
 	m.shader = load(GRASS_DIR + "shader/ground.gdshader")
 	m.set_shader_parameter("noise_texture", _noise_tex(6, 0.008))
 	m.set_shader_parameter("color_gradient", _gradient_tex())
+	_ground_mat = m
 	return m
 
 
@@ -92,6 +104,8 @@ static func make_ground_material() -> ShaderMaterial:
 # billboard quads, 2x2 shape atlas, dithered alpha, gentle breeze (the demo
 # ships wind_velocity (0,0); a light breeze shows the intended TIME wind).
 static func make_grass_material() -> ShaderMaterial:
+	if _grass_mat != null and is_instance_valid(_grass_mat):
+		return _grass_mat
 	var m := ShaderMaterial.new()
 	m.shader = load(GRASS_DIR + "shader/grass.gdshader")
 	m.set_shader_parameter("billboard", true)
@@ -106,6 +120,7 @@ static func make_grass_material() -> ShaderMaterial:
 	m.set_shader_parameter("alpha_cut_start", 0.4)
 	m.set_shader_parameter("alpha_cut_end", 0.6)
 	m.set_shader_parameter("alpha_mode", 1)
+	_grass_mat = m
 	return m
 
 
@@ -136,11 +151,11 @@ static func _build_ground(world: Node3D) -> void:
 	ground.material_override = make_ground_material()
 	# The big flat cash-crop: no shadow-pass work for the ground itself.
 	ground.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ground.gi_mode = GeometryInstance3D.GI_MODE_STATIC
 	world.add_child(ground)
 	var body := StaticBody3D.new()
 	body.name = "GroundBody"
-	body.collision_layer = 2
-	body.collision_mask = 0
+	CBLayers.apply_static(body)
 	var shape := CollisionShape3D.new()
 	var box := BoxShape3D.new()
 	box.size = Vector3(HALF * 2.0, 1.0, HALF * 2.0)
@@ -202,12 +217,13 @@ static func _build_voxels(world: Node3D, rng: RandomNumberGenerator, obstacles: 
 	mmi.name = "Voxels"
 	mmi.multimesh = mm
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	mmi.gi_mode = GeometryInstance3D.GI_MODE_STATIC
+	CBPerf.apply_mmi_culling(mmi, HALF + 4.0)
 	world.add_child(mmi)
 	for s in solids:
 		var sd: Dictionary = s
 		var body := StaticBody3D.new()
-		body.collision_layer = 2
-		body.collision_mask = 0
+		CBLayers.apply_static(body)
 		var shape := CollisionShape3D.new()
 		var bs := BoxShape3D.new()
 		bs.size = sd["size"]
@@ -273,8 +289,7 @@ static func _add_float(world: Node3D, boxes: Array, obstacles: Array,
 	boxes.append({"pos": Vector3(center.x, slab_y * 0.5, center.y),
 		"size": Vector3(0.4, slab_y, 0.4), "col": DIRT_COL})
 	var body := StaticBody3D.new()
-	body.collision_layer = 2
-	body.collision_mask = 0
+	CBLayers.apply_static(body)
 	var shape := CollisionShape3D.new()
 	var bs := BoxShape3D.new()
 	bs.size = Vector3(0.4, slab_y, 0.4)
@@ -298,12 +313,22 @@ static func _rect_has(rects: Array, p: Vector2) -> bool:
 
 # Demo approach: billboard quads, per-instance yaw/scale, no shadows.
 # Blades cover the plane (minus structure footprints + spawn clearing)
-# with a small extra bed on each grass cap top.
+# with a small extra bed on each grass cap top. Count is quality-capped.
+# No custom-data buffer: the active Binbun shader never reads
+# INSTANCE_CUSTOM (only the unused cb_grass_opt variant does), and the
+# whole field gets one explicit AABB so frustum culling is one test.
 static func _plant_grass(world: Node3D, rng: RandomNumberGenerator) -> int:
+	var quality := 2
+	var cc := ConfigFile.new()
+	if cc.load("user://cubebox_settings.cfg") == OK:
+		quality = clampi(int(cc.get_value("game", "quality", 2)), 0, 2)
+	var target := CBPerf.grass_count_for_quality(quality, GRASS_COUNT)
 	var quad := QuadMesh.new()
 	quad.size = Vector2(0.5, 0.7)
-	quad.subdivide_width = 2
-	quad.subdivide_depth = 4
+	# Tri budget: single quad = 2 tris/blade -> 11k blades = ~22k prims.
+	# Same look (shape is texture; bend linear vs curved on 0.5m blades).
+	quad.subdivide_width = 0
+	quad.subdivide_depth = 0
 	quad.center_offset = Vector3(0, 0.35, 0)
 	var qm := StandardMaterial3D.new()
 	qm.vertex_color_use_as_albedo = true
@@ -311,13 +336,14 @@ static func _plant_grass(world: Node3D, rng: RandomNumberGenerator) -> int:
 	quad.material = qm
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_custom_data = false
 	mm.mesh = quad
-	mm.instance_count = GRASS_COUNT
+	mm.instance_count = target
 	var rects: Array = world.get_meta("ow_rects")
 	var tops: Array = world.get_meta("ow_tops")
 	var placed := 0
 	var guard := 0
-	while placed < GRASS_COUNT and guard < GRASS_COUNT * 6:
+	while placed < target and guard < target * 6:
 		guard += 1
 		# A share of blades goes to cap tops, the rest to the plane.
 		if placed % 12 == 11 and not tops.is_empty():
@@ -357,7 +383,10 @@ static func _plant_grass(world: Node3D, rng: RandomNumberGenerator) -> int:
 	mmi.multimesh = mm
 	mmi.material_override = make_grass_material()
 	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mmi.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	CBPerf.apply_mmi_culling(mmi, HALF + 2.0)
 	world.add_child(mmi)
+	world.set_meta("ow_grass_full", placed)
 	return placed
 
 
@@ -392,5 +421,14 @@ static func _cluster_point(rects: Array, rng: RandomNumberGenerator) -> Vector2:
 static func _place_blade(mm: MultiMesh, i: int, p: Vector2, y: float,
 		rng: RandomNumberGenerator, size_mul := 1.0) -> void:
 	var s := rng.randf_range(0.8, 1.35) * size_mul
-	var basis := Basis(Vector3.UP, rng.randf() * TAU).scaled(Vector3.ONE * s)
+	var yaw := rng.randf()
+	var basis := Basis(Vector3.UP, yaw * TAU).scaled(Vector3.ONE * s)
 	mm.set_instance_transform(i, Transform3D(basis, Vector3(p.x, y, p.y)))
+	# No INSTANCE_CUSTOM writes: the active Binbun shader ignores them
+	# (only cb_grass_opt would read them). The two RNG draws are still
+	# consumed so the deterministic meadow layout is byte-identical.
+	if mm.use_custom_data:
+		mm.set_instance_custom_data(i, Color(yaw, s / 1.35, rng.randf(), rng.randf_range(0.6, 1.0)))
+	else:
+		rng.randf()
+		rng.randf_range(0.6, 1.0)

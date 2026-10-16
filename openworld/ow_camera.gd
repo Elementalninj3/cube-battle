@@ -8,6 +8,13 @@ extends Camera3D
 ## steps. Movement stays camera-relative (the world maps input through
 ## move_basis, which reads the settled step angle, so movement never
 ## drifts mid-turn).
+##
+## Camera obstruction fading: each frame a few cheap rays are cast from the
+## camera toward the player, against the dedicated occlusion layer only
+## (mask 4). Any object hit fades smoothly toward a partial alpha so the
+## player stays visible, then restores. Only occluders actually on the
+## camera->player path are touched; the player, UI and gameplay collision are
+## never involved.
 
 const YAW0 := PI * 0.25 # offset dir (1, *, 1): classic isometric angle
 const PITCH0 := 0.59 # locked isometric tilt (arena-like)
@@ -17,12 +24,20 @@ const DIST_MIN := 12.0
 const DIST_MAX := 40.0
 const TURN_SPEED := 7.0 # smoothing rate for quarter-turns and zoom
 
+const OCCLUDER_MASK := 4
+const FADE_TARGET := 1.0
+
 var target: Node3D = null
 var yaw_step := 0 # settled 0..3 quarter-turn index
 var pending := 0 # queued extra steps pressed mid-turn
 var yaw := YAW0 # animated yaw (snaps exactly on arrival)
 var dist := DIST0
 var t_dist := DIST0
+
+# id -> ow_occluder node currently being faded.
+var _occluders: Dictionary = {}
+var _occ_frame := 0
+var _occ_idx := 0
 
 
 func _ready() -> void:
@@ -105,3 +120,43 @@ func _process(dt: float) -> void:
 	var dir := Vector3(sin(yaw) * cos(PITCH0), sin(PITCH0), cos(yaw) * cos(PITCH0))
 	position = focus + dir * dist
 	look_at(focus)
+	_update_occlusion(dt)
+
+
+# --- camera obstruction fading -------------------------------------------
+
+func _update_occlusion(dt: float) -> void:
+	# No occluders in any shipped map (nothing on layer 4): skip the
+	# raycasts entirely. Occluders register in group "occluder" when built.
+	if _occluders.is_empty() and get_tree().get_nodes_in_group("occluder").is_empty():
+		return
+	_occ_frame += 1
+	var space := get_world_3d().direct_space_state
+	for id in _occluders.keys():
+		(_occluders[id] as Node).occlude(0.0)
+	if space != null:
+		var focus := target.position
+		# 1 ray per frame, rotating through body sample points (was 3/frame).
+		var offs := [Vector3(0, 1.9, 0), Vector3(0, 1.0, 0), Vector3(0, 0.25, 0)]
+		_occ_idx = (_occ_idx + 1) % offs.size()
+		var to: Vector3 = focus + offs[_occ_idx]
+		var q := PhysicsRayQueryParameters3D.create(position, to)
+		q.collision_mask = OCCLUDER_MASK
+		q.collide_with_areas = false
+		q.hit_from_inside = false
+		var hit := space.intersect_ray(q)
+		if not hit.is_empty():
+			var col = hit.get("collider")
+			if col != null and col.has_method("occlude"):
+				var oid := (col as Object).get_instance_id()
+				if not _occluders.has(oid):
+					_occluders[oid] = col
+				(col as Node).occlude(FADE_TARGET)
+	# Advance every tracked occluder (also restores ones no longer hit).
+	for id in _occluders.keys():
+		var o := _occluders[id] as Node
+		if not is_instance_valid(o):
+			_occluders.erase(id)
+			continue
+		if o.advance(dt) <= 0.0005 and o.is_settled():
+			_occluders.erase(id)

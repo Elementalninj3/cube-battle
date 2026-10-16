@@ -20,11 +20,15 @@ const ATK_S3 := {"w": 0.3, "a": 0.35, "r": 0.35, "dmg": 9.0, "kb": 8.0,
 	"kind": "spin", "big": true, "radial": true, "cd": 8.0}
 const CD_ORDER := ["S1", "S2", "S3"]
 
+const JUMP_V := 11.0
+const JUMP_MAX_AIR := 1 # single jump for all characters
+var grounded := true
+var air_jumps := 0
 var idx := 0
 var game = null
 var foe = null
 var keys := {"up": [], "down": [], "left": [], "right": [], "L": [], "H": [], "D": [],
-	"S1": [], "S2": [], "S3": []}
+	"S1": [], "S2": [], "S3": [], "JUMP": []}
 
 var body_col := Color(0.86, 0.22, 0.16)
 var hat_kind := 1
@@ -163,7 +167,7 @@ var rec := 0.0
 var stun := 0.0
 var ph := 0.0
 var mass := 1.0
-var buf := {"L": -9.0, "H": -9.0, "D": -9.0, "S1": -9.0, "S2": -9.0, "S3": -9.0}
+var buf := {"L": -9.0, "H": -9.0, "D": -9.0, "S1": -9.0, "S2": -9.0, "S3": -9.0, "JUMP": -9.0}
 var cd := {"S1": 0.0, "S2": 0.0, "S3": 0.0}
 var cd_max := {"S1": 4.0, "S2": 6.0, "S3": 8.0}
 var spin_a := 0.0
@@ -274,6 +278,8 @@ func reset_match(pos: Vector3, p_ang: float) -> void:
 	combo_stage = 0
 	combo_expire = -9.0
 	vy = 0.0
+	grounded = true
+	air_jumps = 0
 	ang = p_ang
 	face = Vector3(sin(ang), 0, cos(ang))
 	hp = 100.0
@@ -1030,6 +1036,8 @@ func _input(event: InputEvent) -> void:
 		buf["S2"] = game.now
 	elif k in (keys["S3"] as Array) or kc in (keys["S3"] as Array):
 		buf["S3"] = game.now
+	elif k in (keys.get("JUMP", []) as Array) or kc in (keys.get("JUMP", []) as Array):
+		buf["JUMP"] = game.now
 
 
 func _has(n: String) -> bool:
@@ -1084,6 +1092,12 @@ func upd(dt: float, play: bool) -> void:
 		wz = 0.0
 	var ta = null
 	if st == "free":
+		# Universal jump (all characters, all modes): grounded hop that
+		# preserves horizontal momentum. Checked before dash/attacks so
+		# Space never gets eaten by another action on solo maps.
+		if play and _has("JUMP") and grounded:
+			_eat("JUMP")
+			do_jump()
 		if play and rec <= 0.0:
 			if _has("D") and dash_cd <= 0.0:
 				_eat("D")
@@ -1230,7 +1244,13 @@ func upd(dt: float, play: bool) -> void:
 			if not hit_done and t >= float(atk["w"]):
 				hit_done = true
 				strike()
-		if t > float(atk["w"]) + float(atk["a"]) and play and _has("D") and dash_cd <= 0.0:
+		# Jump-cancel out of recovery so platforming never feels stuck.
+		if play and _has("JUMP") and grounded and t > float(atk["w"]) + float(atk["a"]):
+			_eat("JUMP")
+			st = "free"
+			atk = null
+			do_jump()
+		elif t > float(atk["w"]) + float(atk["a"]) and play and _has("D") and dash_cd <= 0.0:
 			_eat("D")
 			start_dash(Vector3(wx, 0, wz) if wl > 0.01 else face)
 		elif t >= float(atk["w"]) + float(atk["a"]) + float(atk["r"]):
@@ -1335,14 +1355,43 @@ func upd(dt: float, play: bool) -> void:
 		face = Vector3(sin(ang), 0, cos(ang))
 	position.x += v.x * dt
 	position.z += v.z * dt
-	if position.y <= 0.0 and vy <= 0.0:
-		position.y = 0.0
+	# Ground height. Arena/grass modes have no surface_height hook and keep
+	# the original flat y=0 floor; the open worlds raise it for stairs,
+	# ramps, bridge decks and plateaus.
+	var gh := 0.0
+	if game != null and game.has_method("surface_height"):
+		gh = maxf(0.0, float(game.surface_height(position.x, position.z, position.y)))
+	if position.y <= gh + 0.02 and vy <= 0.0:
+		position.y = gh
 		vy = 0.0
+		grounded = true
+		air_jumps = 0
 	else:
+		grounded = false
 		vy -= 30.0 * dt
+		vy = maxf(vy, -22.0)
 		position.y += vy * dt
 	if position.y < -6.0 or hp <= 0.0:
 		game.ko(self)
+
+
+func do_jump() -> void:
+	# Single universal hop. Works for every skin
+	# because it only touches vy/grounded, never the attack state machine.
+	if st == "ko":
+		return
+	vy = JUMP_V
+	grounded = false
+	air_jumps += 1
+	if game != null and game.get("vfx") != null:
+		game.vfx.burst(position + Vector3(0, 0.1, 0), Color(0.91, 0.89, 0.78), 5, 1.6, 0.07, 0.3)
+	if game != null and game.get("audio") != null:
+		game.audio.play("dash")
+
+
+func ai_jump() -> void:
+	if game != null:
+		buf["JUMP"] = game.now
 
 
 func _start_slash(stage_atk: Dictionary) -> void:
@@ -2195,6 +2244,10 @@ func anim(dt: float, tnow: float) -> void:
 		model.rotation.y = spin_a + twist
 	else:
 		model.rotation.y = twist
+	# Airborne readability: stretch slightly + tuck arms while jumping.
+	if not grounded and st == "free":
+		sq = 1.12 if vy > 1.0 else 0.92
+		lean = -0.18 if vy > 1.0 else 0.25
 	model.scale = Vector3(1.0 / sqrt(maxf(sq, 0.05)), maxf(sq, 0.05), 1.0 / sqrt(maxf(sq, 0.05)))
 	if nj_stretch and _is_ninja():
 		model.scale = Vector3(0.8, 0.8, 1.5)

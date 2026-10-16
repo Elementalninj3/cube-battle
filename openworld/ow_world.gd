@@ -16,6 +16,10 @@ const Builder = preload("res://openworld/ow_builder.gd")
 const EnemyScene = preload("res://openworld/ow_enemy.tscn")
 const CamScript = preload("res://openworld/ow_camera.gd")
 const Util = preload("res://openworld/ow_util.gd")
+const SoloState = preload("res://solo_state.gd")
+const CBLighting = preload("res://core/cb_lighting.gd")
+const CBPerf = preload("res://core/cb_perf.gd")
+const CBLoading = preload("res://core/cb_loading_screen.gd")
 
 # ---- fighter facade surface (mirrors what bb_main provides) ----
 var now := 0.0
@@ -30,6 +34,12 @@ var ts := 1.0
 
 # ---- world state ----
 var obstacles: Array = []
+var plates: Array = []          # walkable raised surfaces (stairs/ramps/decks)
+var space = null                # spatial hash of obstacle circles
+var cave_lights: Array = []     # {pos, color, energy, range}
+var world_half := 32.0          # playable half-extent
+var bounds_val := 30.0          # fighter clamp
+var arena = null                # bb_arena node when the builder uses 1v1 visuals
 var camps: Array = []
 var spawn := Vector3(0, 0, 20)
 var player = null
@@ -68,6 +78,8 @@ var _coin_mesh: CylinderMesh = null
 var _coin_mat: StandardMaterial3D = null
 var _coin_label: Label
 var _last_coin_text := ""
+var _lod_t := 0.0
+var _prof_t := 0.0
 
 # ---- HUD ----
 var _hp_fill: ColorRect
@@ -93,49 +105,86 @@ func _player_bounds() -> float:
 
 
 func _ready() -> void:
+	# Loading screen covers shader precompile + batched world build.
+	state = "loading"
+	var ls := CBLoading.show_new(self, "Loading World")
+	await ls.step(0.05, "Preloading shaders...")
 	_build_env()
+	await ls.step(0.35, "Building terrain...")
 	var built: Dictionary = get_builder().build(self)
 	obstacles = built["obstacles"]
 	camps = built["camps"]
 	spawn = built["spawn"]
+	plates = built.get("plates", [])
+	space = built.get("space", null)
+	cave_lights = built.get("cave_lights", [])
+	world_half = float(built.get("half", 32.0))
+	bounds_val = float(built.get("bounds", 30.0))
 	_spawn_coins(built.get("coins", []))
 	vfx = VfxScript.new()
 	add_child(vfx)
 	audio = AudioScript.new()
 	add_child(audio)
+	# Builders using the 1v1 arena visuals build with null vfx (vfx does
+	# not exist yet at build time); wire it up now so prop-hit bursts show.
+	if built.has("arena") and built["arena"] != null and is_instance_valid(built["arena"]):
+		arena = built["arena"]
+		arena.vfx = vfx
 	_bullet_mesh = BoxMesh.new()
 	_bullet_mesh.size = Vector3.ONE
 	_spawn_player()
 	_spawn_enemies()
+	_spawn_cave_lights()
 	cam = CamScript.new()
 	add_child(cam)
 	cam.target = player
 	_build_hud()
+	await ls.step(0.9, "Spawning...")
+	# (player/enemies/hud already spawned above; just let a frame paint)
+	await ls.step(1.0, "Done")
+	ls.dismiss()
 	state = "play"
+	CBPerf.snapshot("ow_ready")
+
+
+# Surface height hook the fighter's gravity landing reads (see bb_fighter.gd).
+func surface_height(x: float, z: float, y: float) -> float:
+	return Util.surface_height(x, z, y, plates)
+
+
+func _spawn_cave_lights() -> void:
+	if cave_lights.is_empty():
+		return
+	# A handful of local lights for the underground; no shadows on them (a
+	# shadowed point light per cave lamp would be needless cost).
+	for cl in cave_lights:
+		var l := OmniLight3D.new()
+		l.position = cl["pos"]
+		l.light_color = cl["color"]
+		l.light_energy = float(cl["energy"])
+		l.omni_range = float(cl["range"])
+		l.shadow_enabled = false
+		add_child(l)
+
+
+func _lighting_mode() -> int:
+	# Subclasses override (Grass arena opens on a different default set).
+	return CBLighting.Mode.OW_BIG
 
 
 func _build_env() -> void:
-	# Grass Render lighting, copied from grass_render.gd (the demo is the
-	# source of truth): white background, flat ambient color, single
-	# neutral sun 45 degrees down with 2-split shadows. No sky shader, no
-	# tonemap override, no fog, no rim light, no atlas resizing.
-	var we := WorldEnvironment.new()
-	var env := Environment.new()
-	env.background_mode = Environment.BG_COLOR
-	env.background_color = Color(1, 1, 1)
-	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.695381, 0.644979, 0.598817)
-	we.environment = env
-	add_child(we)
-	var sun := DirectionalLight3D.new()
-	sun.rotation = Vector3(-PI / 4.0, 0, 0)
-	sun.shadow_enabled = true
-	sun.directional_shadow_mode = 1
-	sun.directional_shadow_split_1 = 0.01
-	# Bound the shadow range to the playable area: the default 100m renders
-	# shadow casters far outside the 44-68m worlds every frame.
-	sun.directional_shadow_max_distance = 60.0
-	add_child(sun)
+	# Shared cozy lighting rig (one sun + sky ambient + restrained fog).
+	CBPerf.preload_shaders()
+	var mode := _lighting_mode()
+	var profile := int(CBLighting.MODE_DEFAULT_PROFILE.get(
+		mode, CBLighting.Profile.COZY_DAYLIGHT))
+	var c := ConfigFile.new()
+	if c.load("user://cubebox_settings.cfg") == OK:
+		profile = CBLighting.profile_from_config(c, mode)
+	var rig: Dictionary = CBLighting.build(self, profile)
+	var _sun := rig.get("sun") as DirectionalLight3D
+	if _sun != null:
+		CBLighting.apply_quality_shadows(_sun, quality)
 
 
 func _spawn_player() -> void:
@@ -143,12 +192,14 @@ func _spawn_player() -> void:
 	player.idx = 0
 	player.game = self
 	# Arena P1 attacks; movement is camera-relative via ai_ix/ai_iy instead.
+	# Space = jump only, Shift = dash only. Movement is camera-relative
+	# via ai_ix/ai_iy; attacks stay on J/K/L/O/P.
 	player.keys = {"up": [], "down": [], "left": [], "right": [],
-		"L": [KEY_J], "H": [KEY_K], "D": [KEY_SPACE],
-		"S1": [KEY_O], "S2": [KEY_L], "S3": [KEY_P]}
+		"L": [KEY_J], "H": [KEY_K], "D": [KEY_SHIFT],
+		"S1": [KEY_O], "S2": [KEY_L], "S3": [KEY_P], "JUMP": [KEY_SPACE]}
 	player.ai_enabled = true
 	add_child(player)
-	player.setup_skin("ninja")
+	player.setup_skin(SoloState.get_skin())
 	player.bounds = _player_bounds()
 	player.reset_match(spawn, PI)
 	player.foe = null
@@ -241,6 +292,10 @@ func alive_enemies() -> int:
 
 
 func _physics_process(dt: float) -> void:
+	# Physics sim only (movement, damage, projectiles). Visuals (coins spin,
+	# grass/prop LOD, HUD text) live in _process. Guard the loading window.
+	if state != "play" or player == null:
+		return
 	now += dt
 	if dead_t >= 0.0:
 		dead_t -= dt
@@ -286,6 +341,7 @@ func _target_foe() -> void:
 
 
 func _move_axis() -> Vector2:
+	# Desktop only: WASD / arrows. (Mobile stick removed.)
 	var x := 0.0
 	var y := 0.0
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
@@ -407,14 +463,22 @@ func _separate() -> void:
 
 
 func _push_all() -> void:
+	if space != null:
+		player.position = space.push_out(player.position)
+		for e in enemies:
+			if e.alive:
+				e.body.position = space.push_out(e.body.position)
+		return
 	player.position = Util.push_out(player.position, obstacles)
 	for e in enemies:
 		if e.alive:
 			e.body.position = Util.push_out(e.body.position, obstacles)
 
 
-# ---- fighter facade: damage props (none here), defeat handling ----
+# ---- fighter facade: destructible 1v1 props when the builder uses them ----
 func damage_props(_pos: Vector3, _radius: float, _dmg: float) -> int:
+	if arena != null and is_instance_valid(arena):
+		return int(arena.damage_props(_pos, _radius, _dmg))
 	return 0
 
 
@@ -542,7 +606,7 @@ func _upd_bullets(dt: float) -> void:
 		var p: Vector3 = b["p"]
 		var v: Vector3 = b["v"]
 		var np := p + v * dt
-		if float(b["life"]) <= 0.0 or absf(np.x) > 40.0 or absf(np.z) > 40.0 or np.y < -0.5 or np.y > 10.0:
+		if float(b["life"]) <= 0.0 or absf(np.x) > world_half or absf(np.z) > world_half or np.y < -0.5 or np.y > 10.0:
 			_kill_bullet(i, false)
 			continue
 		var hit := false
@@ -891,7 +955,7 @@ func _build_hud() -> void:
 	_obj_label.size = Vector2(640, 30)
 	_obj_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	layer.add_child(_obj_label)
-	var hint := _hud_label("WASD move · J/K attacks · L kunai · P smoke · Space dash   |   MMB-click / E: rotate +90° · Q: rotate -90° · wheel zoom · R reset cam · Esc menu",
+	var hint := _hud_label("WASD move · Space jump · Shift dash · J/K attacks · L kunai · P smoke   |   MMB-click / E: rotate +90° · Q: rotate -90° · wheel zoom · R reset cam · Esc menu",
 		14, Vector2(-560, -30), Control.PRESET_CENTER_BOTTOM)
 	hint.size = Vector2(1120, 22)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -911,10 +975,81 @@ func _build_hud() -> void:
 	layer.add_child(menu_b)
 	_fps_label = _hud_label("-- FPS", 15, Vector2(-110, -40), Control.PRESET_BOTTOM_RIGHT)
 	layer.add_child(_fps_label)
+	# Enemy spawner: spawn any fighter as an open-world enemy at will.
+	var panel := PanelContainer.new()
+	panel.name = "SpawnPanel"
+	panel.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	panel.position = Vector2(16, -218)
+	panel.custom_minimum_size = Vector2(172, 0)
+	layer.add_child(panel)
+	var vb := VBoxContainer.new()
+	vb.name = "SpawnBox"
+	vb.add_theme_constant_override("separation", 6)
+	panel.add_child(vb)
+	_spawn_label = Label.new()
+	_spawn_label.name = "SpawnLabel"
+	_spawn_label.text = "SPAWN ENEMY"
+	_spawn_label.add_theme_font_size_override("font_size", 15)
+	_spawn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(_spawn_label)
+	for sk in ["cubeknight", "ninja", "cubecowboy"]:
+		var sb := Button.new()
+		sb.text = "Spawn " + _enemy_pretty(sk)
+		sb.custom_minimum_size = Vector2(150, 30)
+		sb.pressed.connect(_on_spawn_enemy.bind(sk))
+		vb.add_child(sb)
+	var cb := Button.new()
+	cb.text = "Clear all"
+	cb.custom_minimum_size = Vector2(150, 30)
+	cb.pressed.connect(_on_clear_enemies)
+	vb.add_child(cb)
 
 
 func _on_menu() -> void:
 	get_tree().change_scene_to_file("res://block_brawl.tscn")
+
+
+# ---- enemy spawner (HUD buttons) ----
+const MAX_SPAWNED := 24
+
+var _spawn_label: Label
+var _last_enemy_text := ""
+
+
+func _enemy_pretty(skin: String) -> String:
+	match skin:
+		"cubeknight":
+			return "Knight"
+		"cubecowboy":
+			return "Cowboy"
+		_:
+			return skin.capitalize()
+
+
+func _on_spawn_enemy(skin: String) -> void:
+	if player == null or dead_t >= 0.0:
+		return
+	if alive_enemies() >= MAX_SPAWNED:
+		return
+	var a := randf() * TAU
+	var d := randf_range(6.0, 9.0)
+	var lim := bounds_val - 1.5
+	var at := Vector3(clampf(player.position.x + cos(a) * d, -lim, lim), 0,
+		clampf(player.position.z + sin(a) * d, -lim, lim))
+	var e = EnemyScene.instantiate()
+	add_child(e)
+	e.setup(self, skin, at, float(ENEMY_HP.get(skin, 100.0)))
+	e.body.foe = player
+	enemies.append(e)
+	vfx.burst(at + Vector3(0, 0.8, 0), e.body.body_col, 10, 3.0, 0.1, 0.4)
+	vfx.ring(at, Color.WHITE, 0.3, 2.5, 0.4)
+	audio.play("beep_hi")
+
+
+func _on_clear_enemies() -> void:
+	for e in enemies:
+		if e.alive:
+			ko(e.body)
 
 
 func _upd_hud() -> void:
@@ -946,6 +1081,10 @@ func _upd_hud() -> void:
 	if ot != _last_obj:
 		_last_obj = ot
 		_obj_label.text = ot
+	var et := "SPAWN ENEMY (%d)" % alive_enemies()
+	if et != _last_enemy_text:
+		_last_enemy_text = et
+		_spawn_label.text = et
 	_fps_t += get_process_delta_time()
 	if _fps_t >= 0.5:
 		_fps_t = 0.0
@@ -965,6 +1104,8 @@ func _input(event: InputEvent) -> void:
 
 
 func _process(dt: float) -> void:
+	_update_lod(dt)
+	_update_profiler(dt)
 	# Coin idle motion: spin + bob. Skipped entirely in worlds without coins
 	# or once everything is collected.
 	if coins.is_empty() or coins_collected >= coins_total:
@@ -976,3 +1117,29 @@ func _process(dt: float) -> void:
 		nd.rotation.y += dt * 3.0
 		var bp: Vector3 = c["pos"]
 		nd.position.y = bp.y + sin(now * 3.0 + float(c["phase"])) * 0.12
+
+
+func _update_lod(dt: float) -> void:
+	# Visuals only (4 Hz): grass distance LOD + prop distance cull.
+	# Physics (timers, movement, damage) stays in _physics_process.
+	_lod_t += dt
+	if _lod_t < 0.25:
+		return
+	_lod_t = 0.0
+	if cam == null or player == null:
+		return
+	var cp: Vector3 = cam.global_position
+	if arena != null and is_instance_valid(arena) and arena.has_method("update_lod"):
+		arena.update_lod(cp)
+	var gm := get_node_or_null("GrassField") as MultiMeshInstance3D
+	if gm != null and is_instance_valid(gm) and gm.multimesh != null:
+		var full := int(get_meta("ow_grass_full", gm.multimesh.visible_instance_count))
+		CBPerf.update_grass_lod(gm, cp, Vector3.ZERO, full, quality)
+
+
+func _update_profiler(dt: float) -> void:
+	_prof_t += dt
+	if _prof_t < 10.0:
+		return
+	_prof_t = 0.0
+	CBPerf.snapshot("ow_tick")

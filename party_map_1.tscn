@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cpu0hfd1gy3n8"]
+
+[ext_resource type="Script" path="res://party/party_world.gd" id="1_8wihk"]
+
+[node name="PartyMap1" type="Node3D" unique_id=2071446172]
+script = ExtResource("1_8wihk")

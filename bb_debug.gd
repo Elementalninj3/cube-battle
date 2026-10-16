@@ -5,6 +5,7 @@ extends Node3D
 
 var _mesh: ImmediateMesh
 var _mi: MeshInstance3D
+var _mat: StandardMaterial3D
 
 const HURT := Color(0.2, 1.0, 0.35, 1.0)
 const RANGE_IDLE := Color(1.0, 1.0, 1.0, 0.35)
@@ -22,13 +23,15 @@ func _ready() -> void:
 	_mi = MeshInstance3D.new()
 	_mi.mesh = _mesh
 	_mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.vertex_color_use_as_albedo = true
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	mat.no_depth_test = true
-	_mi.material_override = mat
+	_mat = StandardMaterial3D.new()
+	_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_mat.vertex_color_use_as_albedo = true
+	_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	_mat.no_depth_test = true
+	# Crash fix: do NOT set a material_override while the ImmediateMesh has
+	# no surfaces — GLES3 then queries a null surface material and errors.
+	# The material is attached to the surface itself in draw_frame().
 	add_child(_mi)
 
 
@@ -94,7 +97,7 @@ func _arc_cone(origin: Vector3, yaw: float, atk_range: float, arc_dot: float, ra
 
 func draw_frame(fighters: Array, bullets: Array, bullet_r: float) -> void:
 	_mesh.clear_surfaces()
-	_mesh.surface_begin(Mesh.PRIMITIVE_LINES)
+	_mesh.surface_begin(Mesh.PRIMITIVE_LINES, _mat)
 	for f in fighters:
 		if f == null or not (f is Node3D):
 			continue
@@ -157,5 +160,8 @@ func draw_frame(fighters: Array, bullets: Array, bullet_r: float) -> void:
 
 
 func clear() -> void:
-	if _mesh != null and _mesh.get_surface_count() > 0:
-		_mesh.clear_surfaces()
+	if _mesh == null:
+		return
+	# Empty ImmediateMesh with no material_override is safe; GLES3 no longer
+	# queries a null surface material (see _ready crash fix).
+	_mesh.clear_surfaces()
