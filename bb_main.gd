@@ -976,19 +976,39 @@ func _panel() -> VBoxContainer:
 	return vb
 
 
-func _screen(sname: String) -> Control:
+func _screen(sname: String, scroll := false) -> Control:
 	var c := Control.new()
 	c.set_anchors_preset(Control.PRESET_FULL_RECT)
 	c.visible = false
 	add_child(c)
-	var cc := CenterContainer.new()
-	cc.set_anchors_preset(Control.PRESET_FULL_RECT)
-	c.add_child(cc)
 	var pc := PanelContainer.new()
 	var sb := _style(Color(1.0, 0.98, 0.93, 0.93), 18)
 	sb.shadow_size = 8
 	pc.add_theme_stylebox_override("panel", sb)
-	cc.add_child(pc)
+	if scroll:
+		# Tall content (the Lighting Customizer) can exceed the screen on
+		# phones: scroll the whole panel inside the viewport instead of
+		# clipping it. The CenterContainer below keeps it centred whenever
+		# it IS short enough to fit.
+		var sc := ScrollContainer.new()
+		sc.set_anchors_preset(Control.PRESET_FULL_RECT)
+		sc.offset_left = 10
+		sc.offset_right = -10
+		sc.offset_top = 10
+		sc.offset_bottom = -10
+		sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		c.add_child(sc)
+		var cc := CenterContainer.new()
+		cc.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		cc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		cc.mouse_filter = Control.MOUSE_FILTER_PASS
+		sc.add_child(cc)
+		cc.add_child(pc)
+	else:
+		var cc2 := CenterContainer.new()
+		cc2.set_anchors_preset(Control.PRESET_FULL_RECT)
+		c.add_child(cc2)
+		cc2.add_child(pc)
 	var vb := _panel()
 	pc.add_child(vb)
 	screens[sname] = {"root": c, "box": vb}
@@ -1103,7 +1123,7 @@ func _build_ui() -> void:
 	_btn(ob, "Rematch", "restart", true)
 	_btn(ob, "Main menu", "menu")
 	# settings
-	_screen("settings")
+	_screen("settings", true)
 	var stb: VBoxContainer = screens["settings"]["box"]
 	stb.add_child(_title_label("Settings", 40))
 	var grid := GridContainer.new()
@@ -1118,6 +1138,7 @@ func _build_ui() -> void:
 	_opt(grid)
 	_shadow_opt(grid)
 	_light_type_section(grid)
+	_lighting_customizer(stb)
 	var sf := CheckBox.new()
 	sf.text = "Show FPS"
 	sf.button_pressed = show_fps
@@ -1348,6 +1369,19 @@ func _shadow_opt(grid: GridContainer) -> void:
 	o.item_selected.connect(_on_shadow_selected)
 
 
+# --- Lighting customizer (Settings) -------------------------------------
+# The profile dropdown picks a baseline; these controls override individual
+# values FOR THE ACTIVE PROFILE and persist them in user://. Baselines are
+# never modified, so "Reset to Profile" is always exact.
+var _cust_root: VBoxContainer = null
+var _cust_profile_label: Label = null
+var _cust_sliders: Dictionary = {}
+var _cust_colors: Dictionary = {}
+var _cust_checks: Dictionary = {}
+var _cust_labels: Dictionary = {}
+var _cust_values: Dictionary = {}
+
+
 # One "Lighting Profile" dropdown: Auto (the mode's own default) plus the
 # five cozy environments. Replaces the old Type+Mode (Baked/Sunset/
 # Atmospheric) controls; the choice is global and shared by every mode.
@@ -1373,6 +1407,7 @@ func _on_lighting_profile_selected(pos: int) -> void:
 	# Item 0 is Auto (-1); items 1..n are profiles 0..n-1.
 	lighting_profile = clampi(pos - 1, -1, CBLightingScript.PROFILE_NAMES.size() - 1)
 	_apply_lighting()
+	_cust_refresh()
 	_save_settings()
 
 
@@ -1386,6 +1421,220 @@ func _apply_lighting() -> void:
 		profile = int(CBLightingScript.MODE_DEFAULT_PROFILE.get(
 			CBLightingScript.Mode.LOCAL_1V1, CBLightingScript.Profile.COZY_DAYLIGHT))
 	CBLightingScript.apply({"env": _light_env, "sun": sun, "sky_mat": _light_sky}, profile)
+
+
+# --- Lighting customizer UI --------------------------------------------
+# Collapsible "Lighting Customizer" panel: four sections (Directional
+# Light, Sky & Ambient Light, Atmosphere & Fog, Color Grading) with a live
+# preview, a per-section reset, "Reset to Profile", and "Restore All
+# Lighting Defaults". Overrides belong to the active profile and are saved
+# in user://cubebox_settings.cfg; switching profiles never loses them.
+func _lighting_customizer(parent: VBoxContainer) -> void:
+	var toggle := Button.new()
+	toggle.text = "Lighting Customizer  \u25b8"
+	toggle.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	toggle.focus_mode = Control.FOCUS_NONE
+	parent.add_child(toggle)
+	var body := VBoxContainer.new()
+	body.visible = false
+	parent.add_child(body)
+	toggle.pressed.connect(func() -> void:
+		body.visible = not body.visible
+		toggle.text = "Lighting Customizer  " + ("\u25be" if body.visible else "\u25b8"))
+	_cust_root = body
+
+	_cust_profile_label = Label.new()
+	_cust_profile_label.add_theme_font_size_override("font_size", 14)
+	_cust_profile_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.add_child(_cust_profile_label)
+
+	for section in CBLightingScript.CONTROLS:
+		_cust_section(body, String(section["section"]), section["params"])
+
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 8)
+	body.add_child(actions)
+	var rb := Button.new()
+	rb.text = "Reset to Profile"
+	rb.tooltip_text = "Discard every override on this profile."
+	actions.add_child(rb)
+	rb.pressed.connect(_on_cust_reset_profile)
+	var ra := Button.new()
+	ra.text = "Restore All Defaults"
+	ra.tooltip_text = "Discard overrides on every profile."
+	actions.add_child(ra)
+	ra.pressed.connect(_on_cust_reset_all)
+
+	_cust_refresh()
+
+
+func _cust_section(parent: VBoxContainer, title: String, params: Array) -> void:
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.visible = false
+	var head := Button.new()
+	head.text = "\u25b8 " + title
+	head.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	head.focus_mode = Control.FOCUS_NONE
+	head.pressed.connect(func() -> void:
+		grid.visible = not grid.visible
+		head.text = ("\u25be " if grid.visible else "\u25b8 ") + title)
+	parent.add_child(head)
+	parent.add_child(grid)
+	for p in params:
+		match String(p["kind"]):
+			"float":
+				_cust_float(grid, p)
+			"color":
+				_cust_color(grid, p)
+			"bool":
+				_cust_bool(grid, p)
+	var reset := Button.new()
+	reset.text = "Reset section"
+	reset.focus_mode = Control.FOCUS_NONE
+	reset.pressed.connect(_on_cust_reset_section.bind(params))
+	parent.add_child(reset)
+
+
+func _cust_float(grid: GridContainer, p: Dictionary) -> void:
+	var key := String(p["key"])
+	var lab := Label.new()
+	lab.text = p["label"]
+	grid.add_child(lab)
+	var s := HSlider.new()
+	s.min_value = float(p["min"])
+	s.max_value = float(p["max"])
+	s.step = float(p["step"])
+	s.custom_minimum_size = Vector2(180, 0)
+	grid.add_child(s)
+	var val := Label.new()
+	val.custom_minimum_size = Vector2(72, 0)
+	grid.add_child(val)
+	_cust_sliders[key] = s
+	_cust_labels[key] = lab
+	_cust_values[key] = val
+	s.value_changed.connect(func(v: float) -> void:
+		CBLightingScript.set_override(_cust_profile(), key, v)
+		val.text = _cust_num(v, float(p["step"]))
+		_cust_mark(key)
+		_apply_lighting())
+	s.drag_ended.connect(func(_changed: bool) -> void: _save_settings())
+
+
+func _cust_color(grid: GridContainer, p: Dictionary) -> void:
+	var key := String(p["key"])
+	var lab := Label.new()
+	lab.text = p["label"]
+	grid.add_child(lab)
+	var cb := ColorPickerButton.new()
+	cb.custom_minimum_size = Vector2(180, 0)
+	grid.add_child(cb)
+	var val := Label.new()
+	val.custom_minimum_size = Vector2(72, 0)
+	grid.add_child(val)
+	_cust_colors[key] = cb
+	_cust_labels[key] = lab
+	_cust_values[key] = val
+	cb.color_changed.connect(func(col: Color) -> void:
+		CBLightingScript.set_override(_cust_profile(), key, col)
+		val.text = col.to_html(false)
+		_cust_mark(key)
+		_apply_lighting()
+		_save_settings())
+
+
+func _cust_bool(grid: GridContainer, p: Dictionary) -> void:
+	var key := String(p["key"])
+	var lab := Label.new()
+	lab.text = p["label"]
+	grid.add_child(lab)
+	var c := CheckBox.new()
+	c.text = ""
+	grid.add_child(c)
+	var val := Label.new()
+	val.custom_minimum_size = Vector2(72, 0)
+	grid.add_child(val)
+	_cust_checks[key] = c
+	_cust_labels[key] = lab
+	_cust_values[key] = val
+	c.toggled.connect(func(on: bool) -> void:
+		CBLightingScript.set_override(_cust_profile(), key, on)
+		val.text = "On" if on else "Off"
+		_cust_mark(key)
+		_apply_lighting()
+		_save_settings())
+
+
+func _cust_num(v: float, step: float) -> String:
+	return ("%d" % roundi(v)) if step >= 1.0 else ("%.2f" % v)
+
+
+## The profile whose baseline the customizer edits: the explicit choice, or
+## this mode's default while on "Auto".
+func _cust_profile() -> int:
+	if lighting_profile >= 0:
+		return lighting_profile
+	return int(CBLightingScript.MODE_DEFAULT_PROFILE.get(
+		CBLightingScript.Mode.LOCAL_1V1, CBLightingScript.Profile.COZY_DAYLIGHT))
+
+
+func _cust_mark(key: String) -> void:
+	var lab := _cust_labels.get(key) as Label
+	if lab != null:
+		lab.modulate = Color(1.0, 0.85, 0.45) if CBLightingScript.has_override(_cust_profile(), key) else Color(1, 1, 1)
+
+
+## Pushes effective values into every control (also used after profile
+## switches and resets, so nothing is ever left showing a stale number).
+func _cust_refresh() -> void:
+	if _cust_root == null:
+		return
+	var prof := _cust_profile()
+	var d := CBLightingScript.effective(prof)
+	if _cust_profile_label != null:
+		_cust_profile_label.text = "Editing: %s%s  (overrides are saved per profile)" % [
+			CBLightingScript.PROFILE_NAMES[prof],
+			" \u00b7 Auto" if lighting_profile < 0 else ""]
+	for key in _cust_sliders:
+		var s := _cust_sliders[key] as HSlider
+		var v := float(d.get(key, 0.0))
+		s.set_value_no_signal(v)
+		(_cust_values[key] as Label).text = _cust_num(v, s.step)
+		_cust_mark(key)
+	for key in _cust_colors:
+		var cb := _cust_colors[key] as ColorPickerButton
+		var col: Color = d.get(key, Color.WHITE)
+		cb.set_pick_color(col)
+		(_cust_values[key] as Label).text = col.to_html(false)
+		_cust_mark(key)
+	for key in _cust_checks:
+		var c := _cust_checks[key] as CheckBox
+		var on := bool(d.get(key, true))
+		c.set_pressed_no_signal(on)
+		(_cust_values[key] as Label).text = "On" if on else "Off"
+		_cust_mark(key)
+
+
+func _on_cust_reset_section(params: Array) -> void:
+	for p in params:
+		CBLightingScript.clear_override(_cust_profile(), String(p["key"]))
+	_apply_lighting()
+	_cust_refresh()
+	_save_settings()
+
+
+func _on_cust_reset_profile() -> void:
+	CBLightingScript.clear_profile_overrides(_cust_profile())
+	_apply_lighting()
+	_cust_refresh()
+	_save_settings()
+
+
+func _on_cust_reset_all() -> void:
+	CBLightingScript.clear_all_overrides()
+	_apply_lighting()
+	_cust_refresh()
+	_save_settings()
 
 
 func apply_quality() -> void:
@@ -1420,6 +1669,10 @@ func apply_shadows() -> void:
 	if quality <= 0:
 		sun.shadow_enabled = false
 		return
+	# Respect the active profile/customizer's Shadows toggle.
+	if not bool(CBLightingScript.get_value(_cust_profile(), "shadows")):
+		sun.shadow_enabled = false
+		return
 	sun.shadow_enabled = true
 	var q := clampi(shadow_quality, 0, 3)
 	# NOTE (crash fix): 4096 risks VRAM exhaustion / driver OOM and an
@@ -1440,11 +1693,10 @@ func apply_shadows() -> void:
 	sun.directional_shadow_max_distance = [45.0, 40.0, 35.0, 30.0][q]
 	sun.directional_shadow_blend_splits = q >= 1
 	sun.directional_shadow_pancake_size = [20.0, 16.0, 14.0, 12.0][q]
-	sun.shadow_blur = [1.0, 1.5, 2.0, 2.5][q]
-	sun.shadow_bias = [0.05, 0.04, 0.03, 0.03][q]
+	# Shadow softness / bias / opacity are owned by the lighting profile
+	# (and the Lighting Customizer), so quality only tunes cost: atlas
+	# size, filtering, split mode, range and normal-bias here.
 	sun.shadow_normal_bias = [1.5, 1.0, 0.8, 0.6][q]
-	# Full opacity: soft edges, but characters never look like they float.
-	sun.shadow_opacity = 1.0
 
 
 func _on_shadow_selected(idx: int) -> void:
@@ -1469,6 +1721,7 @@ func _save_settings() -> void:
 	c.set_value("game", "adaptive_min", adaptive_min)
 	c.set_value("game", "p2_cpu", bool(cfg[1].get("cpu", false)))
 	c.set_value("game", "p2_diff", int(cfg[1].get("diff", 1)))
+	CBLightingScript.save_overrides(c)
 	c.save(SETTINGS_PATH)
 
 
@@ -1496,6 +1749,8 @@ func _load_settings() -> void:
 	adaptive_min = clampf(float(c.get_value("game", "adaptive_min", 0.50)), 0.5, 1.0)
 	cfg[1]["cpu"] = bool(c.get_value("game", "p2_cpu", true))
 	cfg[1]["diff"] = clampi(int(c.get_value("game", "p2_diff", 1)), 0, DIFF_NAMES.size() - 1)
+	# Per-profile lighting customizer overrides.
+	CBLightingScript.load_overrides(c)
 
 
 func show_screen(sname) -> void:

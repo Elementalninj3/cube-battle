@@ -1,5 +1,11 @@
 shader_type spatial;
-render_mode blend_mix, depth_prepass_alpha;
+// Opaque cutout: the dithered alpha below is step(0/1) — every surviving
+// fragment is fully opaque — so blend_mix + depth_prepass_alpha produced
+// identical pixels at the cost of the transparent queue, a depth prepass,
+// no depth write and no early-Z rejection across ~100k overlapping
+// billboards. Opaque + discard keeps the exact same coverage/colors and
+// lets the depth buffer cull hidden blade fragments before shading.
+render_mode depth_draw_opaque, cull_disabled;
 
 uniform bool billboard = false;
 

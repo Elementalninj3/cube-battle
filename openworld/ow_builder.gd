@@ -26,11 +26,13 @@ const CLEAR_C := Vector2(0, 4) # central combat clearing (ellipse radii)
 const CLEAR_R := Vector2(10, 8)
 const DIRT_COL := Color(0.42, 0.3, 0.2)
 
-# Palette copied 1:1 from BinbunGrass palette_01.tres so ground and blades
-# use the downloaded shader's exact intended colors.
-const PALETTE := [Color(0.658824, 0.792157, 0.345098),
-	Color(0.458824, 0.654902, 0.262745),
-	Color(0.27451, 0.509804, 0.196078)]
+# Grass tone range: DARK green -> medium green (no light/pale stops, so the
+# meadow never reads washed out). The Binbun shader samples this gradient by
+# a world-space noise value, so blades and ground share the same dark-to-mid
+# green family with soft variation between them.
+const PALETTE := [Color(0.145, 0.360, 0.110),
+	Color(0.235, 0.490, 0.165),
+	Color(0.330, 0.610, 0.230)]
 
 
 static var _noise_cached: NoiseTexture2D = null
